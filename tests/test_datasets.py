@@ -1,6 +1,9 @@
 # python -m unittest tests.test_datasets
+import tempfile
+import json
 import unittest
-from mixalot.datasets import VarSpec, DatasetSpec
+from mixalot.datasets import DatasetSpec, VarSpec
+import os
 
 class TestVarSpec(unittest.TestCase):
 
@@ -33,8 +36,6 @@ class TestVarSpec(unittest.TestCase):
         self.assertIsNone(num_var.categorical_mapping)
         self.assertIsNone(num_var.missing_values)
         self.assertIsNone(num_var.column_name)
-
-
 
     def test_invalid_inputs(self):
         # Test invalid inputs
@@ -97,6 +98,64 @@ class TestDatasetSpec(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             wrong_y_var_dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], 'wrong_var')
         self.assertEqual(str(cm.exception), "y_var wrong_var is not found in the provided variable specifications")
+
+    def test_from_json(self):
+        # Prepare a dict that matches the expected structure of the json file
+        dataset_spec_dict = {
+            "cat_var_specs": [
+                {
+                    "var_name": "categorical_var_1",
+                    "var_type": "categorical",
+                    "categorical_mapping": [["a","b","c"],["d","e","f"]],
+                    "missing_values": "NA",
+                    "column_name": "cat_1"
+                }
+            ],
+            "ord_var_specs": [
+                {
+                    "var_name": "ordinal_var_1",
+                    "var_type": "ordinal",
+                    "categorical_mapping": [["1","2","3"],["4","5","6"]],
+                    "missing_values": "NA",
+                    "column_name": "ord_1"
+                }
+            ],
+            "num_var_specs": [
+                {
+                    "var_name": "numerical_var_1",
+                    "var_type": "numerical",
+                    "missing_values": "NA",
+                    "column_name": "num_1"
+                }
+            ],
+            "y_var": "ordinal_var_1"
+        }
+
+        # Write the dict to a temporary json file
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+            json.dump(dataset_spec_dict, tmp)
+            tempname = tmp.name
+
+        # Load the json file as a DatasetSpec object
+        dataset_spec = DatasetSpec.from_json(tempname)
+
+        # Validate the DatasetSpec object
+        self.assertEqual(len(dataset_spec.cat_var_specs), 1)
+        self.assertEqual(len(dataset_spec.ord_var_specs), 1)
+        self.assertEqual(len(dataset_spec.num_var_specs), 1)
+        self.assertEqual(dataset_spec.y_var, "ordinal_var_1")
+
+        # Also check some attributes of the first VarSpec in each list
+        self.assertEqual(dataset_spec.cat_var_specs[0].var_name, "categorical_var_1")
+        self.assertEqual(dataset_spec.ord_var_specs[0].var_name, "ordinal_var_1")
+        self.assertEqual(dataset_spec.num_var_specs[0].var_name, "numerical_var_1")
+
+    def tearDown(self):
+        try:
+            os.remove(self.tempname)
+        except:
+            pass
+
 
 if __name__ == "__main__":
     unittest.main()

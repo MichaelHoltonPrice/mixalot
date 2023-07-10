@@ -1,4 +1,5 @@
 from typing import List, Optional
+import json
 
 class VarSpec:
     """
@@ -127,3 +128,23 @@ class DatasetSpec:
         # get variable names in the order they are listed
         ordered_vars = [var_spec.var_name for var_spec in var_specs]
         return ordered_vars
+
+    @classmethod
+    def from_json(cls, json_path):
+        """
+        Static method to create a DatasetSpec object from a JSON file.
+
+        Args:
+            json_file (str): Path to the JSON file.
+
+        Returns:
+            DatasetSpec object
+        """
+        with open(json_path, 'r') as file:
+            json_dict = json.load(file)
+
+        cat_var_specs = [VarSpec(**{**spec, 'categorical_mapping': [set(cat_map) for cat_map in spec.get('categorical_mapping', [])]}) for spec in json_dict.get('cat_var_specs', [])]
+        ord_var_specs = [VarSpec(**{**spec, 'categorical_mapping': [set(cat_map) for cat_map in spec.get('categorical_mapping', [])]}) for spec in json_dict.get('ord_var_specs', [])]
+        num_var_specs = [VarSpec(**spec) for spec in json_dict.get('num_var_specs', [])]
+        y_var = json_dict.get('y_var', None)
+        return cls(cat_var_specs, ord_var_specs, num_var_specs, y_var)

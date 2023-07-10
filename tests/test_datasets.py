@@ -1,6 +1,6 @@
 # python -m unittest tests.test_datasets
 import unittest
-from mixalot.datasets import VarSpec
+from mixalot.datasets import VarSpec, DatasetSpec
 
 class TestVarSpec(unittest.TestCase):
 
@@ -49,6 +49,54 @@ class TestVarSpec(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             duplicate_mapping = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'B', 'C'}])
         self.assertEqual(str(cm.exception), "Some strings appear in more than one set for variable cat_var")
+
+
+class TestDatasetSpec(unittest.TestCase):
+
+    def test_valid_inputs(self):
+        # Test valid inputs
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var])
+        self.assertListEqual([var.var_name for var in dataset_spec.cat_var_specs], ['cat_var'])
+        self.assertListEqual([var.var_name for var in dataset_spec.ord_var_specs], ['ord_var'])
+        self.assertListEqual([var.var_name for var in dataset_spec.num_var_specs], ['num_var'])
+
+    def test_invalid_inputs(self):
+        # Test invalid inputs
+        wrong_var = VarSpec('wrong_var', 'categorical', [{'A', 'B'}])
+        with self.assertRaises(ValueError) as cm:
+            invalid_dataset_spec = DatasetSpec([], [wrong_var], [])
+        self.assertEqual(str(cm.exception), "All variable specifications in ordinal_var_specs must be instances of VarSpec of type ordinal")
+
+        with self.assertRaises(ValueError) as cm:
+            empty_dataset_spec = DatasetSpec([], [], [])
+        self.assertEqual(str(cm.exception), "At least one of cat_var_specs, ord_var_specs, or num_var_specs must be non-empty")
+
+    def test_get_ordered_variables(self):
+        # Test getting ordered variables
+        cat_var_1 = VarSpec('cat_var_1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var_2 = VarSpec('cat_var_2', 'categorical', categorical_mapping=[{'E', 'F'}, {'G', 'H'}])
+        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'I', 'J'}, {'K', 'L'}])
+        num_var = VarSpec('num_var', 'numerical')
+        dataset_spec = DatasetSpec([cat_var_1, cat_var_2], [ord_var], [num_var])
+        self.assertListEqual(dataset_spec.get_ordered_variables('categorical'), ['cat_var_1', 'cat_var_2'])
+        self.assertListEqual(dataset_spec.get_ordered_variables('ordinal'), ['ord_var'])
+        self.assertListEqual(dataset_spec.get_ordered_variables('numerical'), ['num_var'])
+
+    def test_y_var(self):
+        # Test valid y_var
+        cat_var = VarSpec('cat_var', 'categorical', [{'A', 'B'}])
+        ord_var = VarSpec('ord_var', 'ordinal', [{'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], 'num_var')
+        self.assertEqual(dataset_spec.y_var, 'num_var')
+
+        # Test invalid y_var
+        with self.assertRaises(ValueError) as cm:
+            wrong_y_var_dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], 'wrong_var')
+        self.assertEqual(str(cm.exception), "y_var wrong_var is not found in the provided variable specifications")
 
 if __name__ == "__main__":
     unittest.main()

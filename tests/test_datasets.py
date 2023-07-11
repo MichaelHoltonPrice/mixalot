@@ -7,11 +7,12 @@ from mixalot.datasets import convert_categories_to_codes
 from mixalot.datasets import parse_numeric_variable
 from mixalot.datasets import scale_numerical_variables
 from mixalot.datasets import extract_dependent_variable
+from mixalot.datasets import load_mixed_data
 import os
 import numpy as np
 import torch
 import pandas as pd
-
+from sklearn.preprocessing import StandardScaler
 
 class TestVarSpec(unittest.TestCase):
 
@@ -379,6 +380,136 @@ class TestExtractDependentVariable(unittest.TestCase):
             Xcat, Xord, Xnum, y = extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum)
         expected_error = "This method should not be called if there is no y-variable in the dataset_spec"
         self.assertEqual(str(cm.exception), expected_error)
+
+
+class TestLoadMixedData(unittest.TestCase):
+    def create_temp_data_file(self, data_dict, file_type='csv'):
+        data_df = pd.DataFrame(data_dict)
+        temp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_type}', delete=False)
+        if file_type == 'csv':
+            data_df.to_csv(temp_file.name, index=False)
+        elif file_type in ['xlsx', 'xls']:
+            data_df.to_excel(temp_file.name, index=False)
+        temp_file.close()  # Manually close the file
+        return temp_file.name
+
+    def create_temp_dataset_spec_file(self, dataset_spec_dict):
+        temp_file = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
+        with open(temp_file.name, 'w') as f:
+            # Convert the sets to lists to make them serializable
+            for cat_var_spec in dataset_spec_dict.get('cat_var_specs', []):
+                cat_var_spec['categorical_mapping'] = [list(item) for item in cat_var_spec.get('categorical_mapping', [])]
+            for ord_var_spec in dataset_spec_dict.get('ord_var_specs', []):
+                ord_var_spec['categorical_mapping'] = [list(item) for item in ord_var_spec.get('categorical_mapping', [])]
+            json.dump(dataset_spec_dict, f)
+        temp_file.close()
+        return temp_file.name
+
+    def test_load_mixed_data(self):
+        # Create temporary data file
+        data_dict = {'A': ['a', 'b', 'c'], 'B': ['d', 'e', 'f'], 'C': [1, 2, 3]}
+    
+        # Create temporary dataset specification file
+        dataset_spec_dict = {
+            'cat_var_specs': [
+                {'var_name': 'A', 'var_type': 'categorical', 'categorical_mapping': [{'a', 'b'}, {'c'}]},
+                {'var_name': 'B', 'var_type': 'categorical', 'categorical_mapping': [{'d', 'e'}, {'f'}]}
+            ],
+            'num_var_specs': [
+                {'var_name': 'C', 'var_type': 'numerical'}
+            ]
+        }
+        dataset_spec_file = self.create_temp_dataset_spec_file(dataset_spec_dict)
+    
+        # Define the expected output
+        expected_Xcat = np.array([[1, 1], [1, 1], [2, 2]])
+        expected_Xnum = np.array([[-1.2247449], [0.], [1.2247449]])
+
+        for file_type in ['csv', 'xlsx']:
+            # Create and load data file for each file type
+            data_file = self.create_temp_data_file(data_dict, file_type=file_type)
+            mixed_dataset, num_scalers = load_mixed_data(dataset_spec_file, data_file)
+    
+            # Assert that the actual output matches the expected output
+            np.testing.assert_array_almost_equal(mixed_dataset.Xcat, expected_Xcat)
+            self.assertIsNone(mixed_dataset.Xord)
+            np.testing.assert_array_almost_equal(mixed_dataset.Xnum, expected_Xnum)
+    
+            # Assert that num_scalers has the correct length
+            self.assertEqual(len(num_scalers), 1)
+    
+            # Clean up temporary files
+            os.unlink(data_file)
+        os.unlink(dataset_spec_file)
+
+    def test_load_mixed_data_unsupported_file_type(self):
+        # Create a file with unsupported type and test if ValueError is raised.
+        data_dict = {'A': ['a', 'b', 'c'], 'B': ['d', 'e', 'f'], 'C': [1, 2, 3]}
+        data_file = self.create_temp_data_file(data_dict, file_type='txt')  # Unsupported file type
+    
+        dataset_spec_dict = {
+            'cat_var_specs': [
+                {'var_name': 'A', 'var_type': 'categorical', 'categorical_mapping': [{'a', 'b'}, {'c'}]},
+                {'var_name': 'B', 'var_type': 'categorical', 'categorical_mapping': [{'d', 'e'}, {'f'}]}
+            ],
+            'num_var_specs': [
+                {'var_name': 'C', 'var_type': 'numerical'}
+            ]
+        }
+        dataset_spec_file = self.create_temp_dataset_spec_file(dataset_spec_dict)
+    
+        with self.assertRaises(ValueError) as cm:
+            mixed_dataset, num_scalers = load_mixed_data(dataset_spec_file, data_file)
+        expected_error = "Unsupported file type"
+        self.assertEqual(str(cm.exception), expected_error)
+
+        os.unlink(data_file)
+        os.unlink(dataset_spec_file)
+
+    def test_load_mixed_data_invalid_specification(self):
+        # Test for cases where the data file and dataset specification file do not align.
+        # Create a data file where 'A' column contains values not specified in the categorical_mapping
+        data_dict = {'A': ['x', 'y', 'z'], 'B': ['d', 'e', 'f'], 'C': [1, 2, 3]}  # 'x', 'y' and 'z' are not in the categorical_mapping
+        data_file = self.create_temp_data_file(data_dict, file_type='csv')
+    
+        dataset_spec_dict = {
+            'cat_var_specs': [
+                {'var_name': 'A', 'var_type': 'categorical', 'categorical_mapping': [{'a', 'b'}, {'c'}]},  # Does not match data in 'A'
+                {'var_name': 'B', 'var_type': 'categorical', 'categorical_mapping': [{'d', 'e'}, {'f'}]}
+            ],
+            'num_var_specs': [
+                {'var_name': 'C', 'var_type': 'numerical'}
+            ]
+        }
+        dataset_spec_file = self.create_temp_dataset_spec_file(dataset_spec_dict)
+    
+        with self.assertRaises(ValueError) as cm:  # Assuming a ValueError is raised
+            mixed_dataset, num_scalers = load_mixed_data(dataset_spec_file, data_file)
+        expected_error = "Variable A contains unobserved category x"
+        self.assertEqual(str(cm.exception), expected_error)
+    
+        os.unlink(data_file)
+        os.unlink(dataset_spec_file)
+    
+    def test_load_mixed_data_file_not_found(self):
+        # Test for cases where the data file or the dataset specification file does not exist.
+        dataset_spec_dict = {
+            'cat_var_specs': [
+                {'var_name': 'A', 'var_type': 'categorical', 'categorical_mapping': [{'a', 'b'}, {'c'}]},
+                {'var_name': 'B', 'var_type': 'categorical', 'categorical_mapping': [{'d', 'e'}, {'f'}]}
+            ],
+            'num_var_specs': [
+                {'var_name': 'C', 'var_type': 'numerical'}
+            ]
+        }
+        dataset_spec_file = self.create_temp_dataset_spec_file(dataset_spec_dict)
+    
+        with self.assertRaises(FileNotFoundError) as cm:
+            mixed_dataset, num_scalers = load_mixed_data(dataset_spec_file, "non_existent_file.csv")  # Non-existent file
+        expected_error = "Data file 'non_existent_file.csv' does not exist."
+        self.assertEqual(str(cm.exception), expected_error)
+    
+        os.unlink(dataset_spec_file)
 
 
 if __name__ == "__main__":

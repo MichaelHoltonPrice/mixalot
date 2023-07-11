@@ -1,10 +1,11 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 import json
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
+import os
 
 class VarSpec:
     """
@@ -488,3 +489,86 @@ def extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum):
         Xnum = np.delete(Xnum, idx, axis=1)
         
     return Xcat, Xord, Xnum, y
+
+def load_mixed_data(dataset_spec_file: str, data_file: str) -> Tuple[MixedDataset, StandardScaler]:
+    """
+    Function to load mixed dataset from file
+
+    Args:
+        dataset_spec_file (str): Path to a json file containing the specifications for the dataset.
+        data_file (str): Path to the dataset file (.csv, .xlsx, or .xls format).
+
+    Returns:
+        mixed_dataset (MixedDataset): A MixedDataset object generated from the inputs files
+        num_scalers (StandardScaler): Scaler objects used to scale numerical variables.
+
+    Raises:
+        FileNotFoundError: If the provided dataset specification or data file does not exist.
+        ValueError: If the provided file type is unsupported, or if there are inconsistencies between the data file and the dataset specification file.
+    """
+    # Ensure that dataset specification file exists
+    if not os.path.isfile(dataset_spec_file):
+        raise FileNotFoundError(f"Dataset specification file '{dataset_spec_file}' does not exist.")
+
+    # Ensure that data file exists
+    if not os.path.isfile(data_file):
+        raise FileNotFoundError(f"Data file '{data_file}' does not exist.")
+    
+    # Load the dataset specification from file
+    dataset_spec = DatasetSpec.from_json(dataset_spec_file)
+
+    # Load the dataframe from the file, with all columns loaded as strings
+    if data_file.endswith('.csv'):
+        dataframe = pd.read_csv(data_file, dtype=str)
+    elif data_file.endswith('.xlsx') or data_file.endswith('.xls'):
+        dataframe = pd.read_excel(data_file, dtype=str)
+    else:
+        raise ValueError('Unsupported file type')
+    
+    # Ensure that the dataset specification matches the data file
+    dataframe_columns = set(dataframe.columns)
+    for var_name in dataset_spec.all_var_names:
+        if var_name not in dataframe_columns:
+            raise ValueError(f"Variable '{var_name}' is specified in dataset specification but not found in data file.")
+        
+    # Initialize empty lists for storing data. These are turned into matrices
+    # below
+    Xcat, Xord, Xnum = [], [], []
+
+    # Process the data according to its type
+    for var_type, X_list in zip(['categorical', 'ordinal', 'numerical'], [Xcat, Xord, Xnum]):
+        ordered_variables = dataset_spec.get_ordered_variables(var_type)
+
+        for var_name in ordered_variables:
+            # Get the variable specification for this variable
+            var_spec = dataset_spec.get_var_spec(var_name)
+            column_name = var_spec.column_name if var_spec.column_name else var_spec.var_name
+
+            # Get the pandas Series object for this column
+            column_data = dataframe[column_name]
+
+            # Process the column according to its type
+            if var_type in {'categorical', 'ordinal'}:
+                parsed_column = convert_categories_to_codes(column_data, var_spec)
+            else:  # var_type == 'numerical'
+                parsed_column = parse_numeric_variable(column_data, var_spec)
+
+            # Append the processed column to the list (soon to be matrix) for
+            # this variable type
+            X_list.append(parsed_column)
+
+    # Convert lists of columns into 2D arrays
+    Xcat = np.column_stack(Xcat).astype(np.int32) if len(Xcat) != 0 else None
+    Xord = np.column_stack(Xord).astype(np.int32) if len(Xord) != 0 else None
+    Xnum = np.column_stack(Xnum).astype(np.float32) if len(Xnum) != 0 else None
+
+    # Scale numerical variables and get the scaler object
+    if Xnum is not None:
+        num_scalers = scale_numerical_variables(Xnum)
+    else:
+        num_scalers = None
+
+    # Create the mixed dataset object
+    mixed_dataset = MixedDataset(dataset_spec, Xcat, Xord, Xnum)
+    
+    return mixed_dataset, num_scalers

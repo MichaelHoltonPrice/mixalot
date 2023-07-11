@@ -276,15 +276,17 @@ class MixedDataset(Dataset):
         # Initialize an empty list to store the item
         item = []
 
-        # Appedn x_cat (or None)
+        # TODO: determine whether it is best/faster to store Xcat (etc.) as
+        #       torch tensors rather than numpy arrays.
+        # Append x_cat (or None)
         if self.Xcat is not None:
-            item.append(self.Xcat[idx])
+            item.append(torch.from_numpy(self.Xcat[idx]))
         else:
             item.append(None)
         
-        # Appedn x_ord (or None)
+        # Append x_ord (or None)
         if self.Xord is not None:
-            item.append(self.Xord[idx])
+            item.append(torch.from_numpy(self.Xord[idx]))
         else:
             item.append(None)
 

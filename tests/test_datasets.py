@@ -203,19 +203,19 @@ class TestMixedDataset(unittest.TestCase):
         Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
         Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
         Xnum = np.array([[9], [10]], dtype=np.float32)
-        expected_y_data = np.array([9], dtype=np.float32)
+        expected_y_data = torch.from_numpy(np.array([9], dtype=np.float32))
     
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
         
-        item = mixed_dataset[0]
+        x_cat, x_ord, x_num, y = mixed_dataset[0]
         # Check the value of x_cat
-        self.assertTrue((item[0] == Xcat[0]).all())
+        self.assertTrue((x_cat == torch.from_numpy(Xcat[0])).all())
         # Check the value of x_ord
-        self.assertTrue((item[1] == Xord[0]).all())
+        self.assertTrue((x_ord == torch.from_numpy(Xord[0])).all())
         # Check the value of x_num
-        self.assertEqual(item[2], None)
+        self.assertEqual(x_num, None)
         # Check the value of y
-        self.assertTrue((item[3] == expected_y_data).all())
+        self.assertTrue((y == expected_y_data).all())
 
     def test_inconsistent_shapes(self):
         # Test inconsistent shapes

@@ -441,18 +441,14 @@ def scale_numerical_variables(Xnum):
             num_scalers[i] = scaler
     return num_scalers
 
-
-def extract_dependent_variable(y_var_name, var_spec, Xcat, Xord, Xnum):
+def extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum):
     """
     Function to extract the dependent variable from the data.
     
     Parameters
     ----------
-    y_var_name: str
-        The name of the dependent variable.
-    var_spec: object
-        An object containing a dictionary of variable specifications and functions for obtaining
-        the ordered variables of a specific type (categorical, ordinal, numerical).
+    dataset_spec: DatasetSpec
+        A DatasetSpec object containing the specifications of the dataset.
     Xcat: array
         The categorical data.
     Xord: array
@@ -465,24 +461,30 @@ def extract_dependent_variable(y_var_name, var_spec, Xcat, Xord, Xnum):
     tuple
         A tuple consisting of the updated matrices for categorical, ordinal, and numerical data,
         and the extracted dependent variable.
-    
+        
     Raises
     ------
     ValueError
-        If the dependent variable is not found in any variables.
+        If the y-variable is not specified in the dataset_spec.
     """
-    for var_type in ['categorical', 'ordinal', 'numerical']:
-        if y_var_name in var_spec.get_ordered_variables(var_type):
-            idx = var_spec.get_ordered_variables(var_type).index(y_var_name)
-            if var_type == 'categorical':
-                y = Xcat[:, idx]
-                Xcat = np.delete(Xcat, idx, axis=1)
-            elif var_type == 'ordinal':
-                y = Xord[:, idx]
-                Xord = np.delete(Xord, idx, axis=1)
-            else:  # var_type == 'numerical'
-                y = Xnum[:, idx]
-                Xnum = np.delete(Xnum, idx, axis=1)
-            return Xcat, Xord, Xnum, y
+    y_var_name = dataset_spec.y_var
 
-    raise ValueError(f"y_var_name {y_var_name} not found in any variables")
+    if y_var_name is None:
+        raise ValueError("This method should not be called if there is no y-variable in the dataset_spec")
+
+    var_spec = dataset_spec.get_var_spec(y_var_name)
+
+    if var_spec.var_type == 'categorical':
+        idx = dataset_spec.get_ordered_variables('categorical').index(y_var_name)
+        y = Xcat[:, idx]
+        Xcat = np.delete(Xcat, idx, axis=1)
+    elif var_spec.var_type == 'ordinal':
+        idx = dataset_spec.get_ordered_variables('ordinal').index(y_var_name)
+        y = Xord[:, idx]
+        Xord = np.delete(Xord, idx, axis=1)
+    else:  # var_spec.var_type == 'numerical'
+        idx = dataset_spec.get_ordered_variables('numerical').index(y_var_name)
+        y = Xnum[:, idx]
+        Xnum = np.delete(Xnum, idx, axis=1)
+        
+    return Xcat, Xord, Xnum, y

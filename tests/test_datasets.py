@@ -6,10 +6,12 @@ from mixalot.datasets import DatasetSpec, VarSpec, MixedDataset
 from mixalot.datasets import convert_categories_to_codes
 from mixalot.datasets import parse_numeric_variable
 from mixalot.datasets import scale_numerical_variables
+from mixalot.datasets import extract_dependent_variable
 import os
 import numpy as np
 import torch
 import pandas as pd
+
 
 class TestVarSpec(unittest.TestCase):
 
@@ -330,6 +332,53 @@ class TestScaleNumericalVariables(unittest.TestCase):
         Xnum = np.empty((0, 0))
         num_scalers = scale_numerical_variables(Xnum)
         self.assertEqual(len(num_scalers), 0)
+
+
+class TestExtractDependentVariable(unittest.TestCase):
+
+    def test_extract_dependent_variable(self):
+        # Test 1: categorical y variable
+        cat_var_spec1 = VarSpec("cat_var1", "categorical", [{0, 1, 2}])
+        cat_var_spec2 = VarSpec("y_var", "categorical", [{0, 1, 2, 3}])
+        ord_var_spec1 = VarSpec("ord_var1", "ordinal", [{0, 1, 2, 3, 4}])
+        num_var_spec1 = VarSpec("num_var1", "numerical")
+        dataset_spec = DatasetSpec([cat_var_spec1, cat_var_spec2], [ord_var_spec1], [num_var_spec1], "y_var")
+        Xcat = np.array([[1, 3], [2, 1], [0, 2], [1, 0]])
+        Xord = np.array([[0], [3], [2], [1]])
+        Xnum = np.array([[1.1], [2.2], [3.3], [4.4]])
+        Xcat, Xord, Xnum, y = extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum)
+        np.testing.assert_array_equal(Xcat, np.array([[1], [2], [0], [1]]))
+        np.testing.assert_array_equal(y, np.array([3, 1, 2, 0]))
+
+        # Test 2: ordinal y variable
+        ord_var_spec2 = VarSpec("y_var", "ordinal", [{0, 1, 2, 3, 4}])
+        dataset_spec = DatasetSpec([cat_var_spec1], [ord_var_spec1, ord_var_spec2], [num_var_spec1], "y_var")
+        Xord = np.array([[0, 3], [3, 1], [2, 2], [1, 4]])
+        Xcat, Xord, Xnum, y = extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum)
+        np.testing.assert_array_equal(Xord, np.array([[0], [3], [2], [1]]))
+        np.testing.assert_array_equal(y, np.array([3, 1, 2, 4]))
+
+        # Test 3: numerical y variable
+        num_var_spec2 = VarSpec("y_var", "numerical")
+        dataset_spec = DatasetSpec([cat_var_spec1], [ord_var_spec1], [num_var_spec1, num_var_spec2], "y_var")
+        Xnum = np.array([[1.1, 2.2], [2.2, 3.3], [3.3, 4.4], [4.4, 5.5]])
+        Xcat, Xord, Xnum, y = extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum)
+        np.testing.assert_array_equal(Xnum, np.array([[1.1], [2.2], [3.3], [4.4]]))
+        np.testing.assert_array_equal(y, np.array([2.2, 3.3, 4.4, 5.5]))
+
+    def test_no_y_variable(self):
+        # Test 4: Error when no y variable
+        cat_var_spec1 = VarSpec("cat_var1", "categorical", [{0, 1, 2}])
+        ord_var_spec1 = VarSpec("ord_var1", "ordinal", [{0, 1, 2, 3, 4}])
+        num_var_spec1 = VarSpec("num_var1", "numerical")
+        dataset_spec = DatasetSpec([cat_var_spec1], [ord_var_spec1], [num_var_spec1], None)
+        Xcat = np.array([[1], [2], [0], [1]])
+        Xord = np.array([[0], [3], [2], [1]])
+        Xnum = np.array([[1.1], [2.2], [3.3], [4.4]])
+        with self.assertRaises(ValueError) as cm:
+            Xcat, Xord, Xnum, y = extract_dependent_variable(dataset_spec, Xcat, Xord, Xnum)
+        expected_error = "This method should not be called if there is no y-variable in the dataset_spec"
+        self.assertEqual(str(cm.exception), expected_error)
 
 
 if __name__ == "__main__":

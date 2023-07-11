@@ -1,15 +1,16 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 import json
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from typing import Dict
+from sklearn.preprocessing import StandardScaler
+import pandas as pd
 
 class VarSpec:
     """
     Represents the specifications of a variable in a dataset.
 
-    Each VarSpec object captures the variable name, its type (numerical, categorical, or ordinal), 
+    Each VarSpec object captures the variable name, its type (numerical, ttttttttttt, or ordinal), 
     a mapping for categorical variables (if applicable), any missing values, and the order of the variable.
 
     Args:
@@ -134,6 +135,27 @@ class DatasetSpec:
         # get variable names in the order they are listed
         ordered_vars = [var_spec.var_name for var_spec in var_specs]
         return ordered_vars
+
+    def get_var_spec(self, var_name):
+        """
+        Returns the VarSpec corresponding to the provided variable name.
+
+        Args:
+        - var_name: The name of the variable for which the VarSpec is to be returned.
+
+        Returns:
+        - var_spec: The VarSpec corresponding to the provided variable name.
+
+        Raises:
+        - ValueError: If the var_name is not found in the variable specifications.
+        """
+        for var_type in ['cat', 'ord', 'num']:
+            for var_spec in getattr(self, var_type + "_var_specs"):
+                if var_spec.var_name == var_name:
+                    return var_spec
+
+        raise ValueError(f"Variable name {var_name} is not found in the provided variable specifications")
+
 
     @classmethod
     def from_json(cls, json_path):
@@ -292,14 +314,105 @@ class MixedDataset(Dataset):
 
         # Append x_num (or None)
         if self.Xnum is not None:
-            item.append(self.Xnum[idx])
+            item.append(torch.from_numpy(self.Xnum[idx]))
         else:
             item.append(None)
 
         # If y_data exists, append the corresponding value to the item
         # We do not append None if it does not exist.
         if self.y_data is not None:
-            item.append(self.y_data[idx])
+            item.append(torch.from_numpy(np.array([self.y_data[idx]],
+                                                  dtype=self.y_data.dtype)))
 
         # Return the item
         return item
+
+def convert_categories_to_codes(data, var_spec):
+    """
+    Function to convert categorical or ordinal data to coded format.
+    
+    Parameters
+    ----------
+    data: array
+        The data (column) to be converted.
+    var_spec: VarSpec
+        The variable specification for this column
+        
+    Returns
+    -------
+    array
+        Integer codes of the converted data as specified by
+        var_spec.categorical_mapping, where 0 is reserved for NA
+
+    Raises
+    ------
+    ValueError
+        If the input column contains an unobserved category.
+    """
+    # Create a mapping from category to code
+    category_to_code = {cat: i+1 for i, cat_set in enumerate(var_spec.categorical_mapping)\
+                        for cat in cat_set}
+
+    codes = []
+    for entry in data:
+        # If the entry is null, this is a missing value (coded as 0)
+        if pd.isnull(entry):
+            codes.append(0)
+        else:
+            # The entry is not null, so strip it of whitespace
+            entry = entry.strip()
+            if entry == '':
+                # We interpret blank entries as missing
+                codes.append(0)
+            elif var_spec.missing_values is not None and entry in var_spec.missing_values:
+                # This is an NA explicitly specified in var_spec.missing_values
+                codes.append(0)
+            else:
+                # Try to get the code for this category
+                code = category_to_code.get(entry)
+                if code is None:
+                    # This entry doesn't map to any category in category_to_code
+                    raise ValueError(f"Variable {var_spec.var_name} contains unobserved category {entry}")
+                else:
+                    codes.append(code)
+    return np.array(codes)
+
+def parse_numeric_variable(data, var_spec):
+    """
+    Function to handle missing values in numerical data.
+    
+    Parameters
+    ----------
+    data: array
+        The data in which to handle missing values.
+    var_spec: VarSpec
+        The variable specification for this column.
+        
+    Returns
+    -------
+    array
+        The data with missing values handled.
+    """
+    handled_data = []
+    for entry in data:
+        # If the entry is null, this is a missing value (coded as NaN)
+        if pd.isnull(entry):
+            handled_data.append(np.nan)
+        else:
+            # The entry is not null, so strip it of whitespace
+            entry = entry.strip()
+            if entry == '':
+                # We interpret blank entries as missing
+                handled_data.append(np.nan)
+            elif var_spec.missing_values is not None and entry in var_spec.missing_values:
+                # This is an NA explicitly specified in var_spec.missing_values
+                handled_data.append(np.nan)
+            else:
+                try:
+                    # This is a valid number! Convert it to float.
+                    handled_data.append(float(entry))
+                except ValueError:
+                    raise ValueError(f"Invalid entry {entry} for variable {var_spec.var_name} cannot be converted to float")
+    return np.array(handled_data, dtype=float)
+
+

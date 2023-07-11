@@ -416,3 +416,73 @@ def parse_numeric_variable(data, var_spec):
     return np.array(handled_data, dtype=float)
 
 
+def scale_numerical_variables(Xnum):
+    """
+    Function to scale numerical variables.
+    
+    Parameters
+    ----------
+    Xnum: array
+        The numerical data to be scaled.
+        
+    Returns
+    -------
+    dict
+        A dictionary of scalers for each numerical variable, where the keys
+        are the integer column index (starting from 0)
+    """
+    num_scalers = {}
+    if Xnum.shape[1] > 0:
+        for i in range(Xnum.shape[1]):
+            col = Xnum[:, i]
+            scaler = StandardScaler()
+            scaled_col = scaler.fit_transform(col.reshape(-1, 1))
+            Xnum[:, i] = scaled_col.flatten()
+            num_scalers[i] = scaler
+    return num_scalers
+
+
+def extract_dependent_variable(y_var_name, var_spec, Xcat, Xord, Xnum):
+    """
+    Function to extract the dependent variable from the data.
+    
+    Parameters
+    ----------
+    y_var_name: str
+        The name of the dependent variable.
+    var_spec: object
+        An object containing a dictionary of variable specifications and functions for obtaining
+        the ordered variables of a specific type (categorical, ordinal, numerical).
+    Xcat: array
+        The categorical data.
+    Xord: array
+        The ordinal data.
+    Xnum: array
+        The numerical data.
+        
+    Returns
+    -------
+    tuple
+        A tuple consisting of the updated matrices for categorical, ordinal, and numerical data,
+        and the extracted dependent variable.
+    
+    Raises
+    ------
+    ValueError
+        If the dependent variable is not found in any variables.
+    """
+    for var_type in ['categorical', 'ordinal', 'numerical']:
+        if y_var_name in var_spec.get_ordered_variables(var_type):
+            idx = var_spec.get_ordered_variables(var_type).index(y_var_name)
+            if var_type == 'categorical':
+                y = Xcat[:, idx]
+                Xcat = np.delete(Xcat, idx, axis=1)
+            elif var_type == 'ordinal':
+                y = Xord[:, idx]
+                Xord = np.delete(Xord, idx, axis=1)
+            else:  # var_type == 'numerical'
+                y = Xnum[:, idx]
+                Xnum = np.delete(Xnum, idx, axis=1)
+            return Xcat, Xord, Xnum, y
+
+    raise ValueError(f"y_var_name {y_var_name} not found in any variables")

@@ -5,6 +5,7 @@ import unittest
 from mixalot.datasets import DatasetSpec, VarSpec, MixedDataset
 from mixalot.datasets import convert_categories_to_codes
 from mixalot.datasets import parse_numeric_variable
+from mixalot.datasets import scale_numerical_variables
 import os
 import numpy as np
 import torch
@@ -305,6 +306,30 @@ class TestParseNumericVariable(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             parse_numeric_variable(data, var_spec)
         self.assertEqual(str(cm.exception), "Invalid entry invalid for variable test_var cannot be converted to float")
+
+class TestScaleNumericalVariables(unittest.TestCase):
+
+    def test_scale_numerical_variables(self):
+        # Single column of data
+        Xnum = np.array([[1.0], [2.0], [3.0]])
+        num_scalers = scale_numerical_variables(Xnum)
+        self.assertEqual(len(num_scalers), 1)
+        np.testing.assert_array_almost_equal(Xnum, np.array([[-1.22474487], [0.0], [1.22474487]]))
+
+        # Multiple columns of data
+        Xnum = np.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0]])
+        num_scalers = scale_numerical_variables(Xnum)
+        self.assertEqual(len(num_scalers), 2)
+        np.testing.assert_array_almost_equal(
+            Xnum,
+            np.array([[-1.22474487, -1.22474487], [0.0, 0.0], [1.22474487, 1.22474487]])
+        )
+
+    def test_empty_array(self):
+        # Empty array
+        Xnum = np.empty((0, 0))
+        num_scalers = scale_numerical_variables(Xnum)
+        self.assertEqual(len(num_scalers), 0)
 
 
 if __name__ == "__main__":

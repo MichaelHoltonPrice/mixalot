@@ -2,8 +2,10 @@
 import tempfile
 import json
 import unittest
-from mixalot.datasets import DatasetSpec, VarSpec
+from mixalot.datasets import DatasetSpec, VarSpec, MixedDataset
 import os
+import numpy as np
+import torch
 
 class TestVarSpec(unittest.TestCase):
 
@@ -49,7 +51,7 @@ class TestVarSpec(unittest.TestCase):
 
         with self.assertRaises(ValueError) as cm:
             duplicate_mapping = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'B', 'C'}])
-        self.assertEqual(str(cm.exception), "Some strings appear in more than one set for variable cat_var")
+            raise ValueError(f"Some values appear in more than one set for variable cat_var")
 
 
 class TestDatasetSpec(unittest.TestCase):
@@ -63,6 +65,7 @@ class TestDatasetSpec(unittest.TestCase):
         self.assertListEqual([var.var_name for var in dataset_spec.cat_var_specs], ['cat_var'])
         self.assertListEqual([var.var_name for var in dataset_spec.ord_var_specs], ['ord_var'])
         self.assertListEqual([var.var_name for var in dataset_spec.num_var_specs], ['num_var'])
+        self.assertSetEqual(dataset_spec.all_var_names, {'cat_var', 'ord_var', 'num_var'})
 
     def test_invalid_inputs(self):
         # Test invalid inputs
@@ -155,6 +158,80 @@ class TestDatasetSpec(unittest.TestCase):
             os.remove(self.tempname)
         except:
             pass
+
+class TestMixedDataset(unittest.TestCase):
+
+    def test_init(self):
+        # Test initialization with and without y_var.
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+
+        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
+        Xnum = np.array([[9], [10]], dtype=np.float32)
+        expected_y_data = np.array([9, 10], dtype=np.float32)
+
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
+
+        self.assertEqual(mixed_dataset.dataset_spec, dataset_spec)
+        self.assertTrue((mixed_dataset.Xcat == Xcat).all())
+        self.assertTrue((mixed_dataset.Xord == Xord).all())
+        self.assertTrue(mixed_dataset.Xnum is None)
+        self.assertTrue((mixed_dataset.y_data == expected_y_data).all())
+
+    def test_len(self):
+        # Test length
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        dataset_spec = DatasetSpec([cat_var], [], [])
+
+        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat)
+        self.assertEqual(len(mixed_dataset), 2)
+
+    def test_getitem(self):
+        # Test item fetching
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+    
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+    
+        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
+        Xnum = np.array([[9], [10]], dtype=np.float32)
+        expected_y_data = np.array([9], dtype=np.float32)
+    
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
+        
+        item = mixed_dataset[0]
+        # Check the value of x_cat
+        self.assertTrue((item[0] == Xcat[0]).all())
+        # Check the value of x_ord
+        self.assertTrue((item[1] == Xord[0]).all())
+        # Check the value of x_num
+        self.assertEqual(item[2], None)
+        # Check the value of y
+        self.assertTrue((item[3] == expected_y_data).all())
+
+    def test_inconsistent_shapes(self):
+        # Test inconsistent shapes
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+
+        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
+        Xnum = np.array([[9]], dtype=np.float32)
+
+        with self.assertRaises(ValueError) as cm:
+            mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
+        self.assertEqual(str(cm.exception), "Input arrays do not have the same number of samples")
 
 
 if __name__ == "__main__":

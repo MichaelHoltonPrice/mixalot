@@ -328,6 +328,24 @@ class MixedDataset(Dataset):
         # Return the item
         return item
 
+    def get_arrays(self):
+        """
+        Return the input arrays Xcat, Xord, Xnum and target y_data.
+    
+        Returns:
+            tuple: A four element tuple containing:
+                Xcat (np.ndarray or None): Categorical input data array 
+                Xord (np.ndarray or None): Ordinal input data array
+                Xnum (np.ndarray or None): Numerical input data array
+                y_data (np.ndarray or None): Target array
+        """
+        
+        return (self.Xcat, 
+                self.Xord,
+                self.Xnum,
+                self.y_data)
+
+
 def convert_categories_to_codes(data, var_spec):
     """
     Function to convert categorical or ordinal data to coded format.

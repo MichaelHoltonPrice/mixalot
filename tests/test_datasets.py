@@ -252,12 +252,54 @@ class TestMixedDataset(unittest.TestCase):
 
         Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
         Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
-        Xnum = np.array([[9]], dtype=np.float32)
+        Xnum = np.array([[9]])
 
         with self.assertRaises(ValueError) as cm:
             mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
         self.assertEqual(str(cm.exception), "Input arrays do not have the same number of samples")
 
+    def test_get_arrays_with_y(self):
+        cat_var1 = VarSpec('cat1', 'categorical', [{'A','B'}])  
+        num_var1 = VarSpec('num1', 'numerical')   
+        num_var2 = VarSpec('num2', 'numerical')
+    
+        dataset_spec = DatasetSpec([cat_var1], [], [num_var1, num_var2], y_var='num1')
+    
+        Xcat = np.random.randint(0, 2, (10, 1), dtype=np.int32)  
+        Xnum = np.random.randn(10, 2).astype(np.float32)
+    
+        dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xnum=Xnum)
+    
+        x_cat, x_ord, x_num, y = dataset.get_arrays()
+    
+        np.testing.assert_array_almost_equal(x_cat, Xcat)
+        self.assertIsNone(x_ord)
+        np.testing.assert_array_almost_equal(x_num, Xnum[:,1:])  
+        np.testing.assert_array_almost_equal(y, dataset.y_data)
+    
+    def test_get_arrays_no_y(self):
+        cat_var1 = VarSpec('cat1', 'categorical', [{'A','B'}])
+        cat_var2 = VarSpec('cat2', 'categorical', [{'C','D'}])
+    
+        num_var1 = VarSpec('num1', 'numerical')
+        num_var2 = VarSpec('num2', 'numerical') 
+        num_var3 = VarSpec('num3', 'numerical')
+    
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [num_var1, num_var2, num_var3])
+    
+        Xcat = np.random.randint(0, 2, (10, 2), dtype=np.int32)
+        Xnum = np.random.randn(10, 3).astype(np.float32)
+    
+        dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xnum=Xnum)
+    
+        x_cat, x_ord, x_num, y = dataset.get_arrays()
+    
+        np.testing.assert_array_almost_equal(x_cat, Xcat)
+        self.assertIsNone(x_ord)
+        np.testing.assert_array_almost_equal(x_num, Xnum)
+        self.assertIsNone(y)
+
+  
 class TestConvertCategoriesToCodes(unittest.TestCase):
 
     def test_convert_categories_to_codes(self):

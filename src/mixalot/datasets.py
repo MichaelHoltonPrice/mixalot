@@ -201,16 +201,18 @@ class DatasetSpec:
         y_var = json_dict.get('y_var', None)
         return cls(cat_var_specs, ord_var_specs, num_var_specs, y_var)
 
-
 class MixedDataset(Dataset):
     """
     A class to hold and manage mixed types of data (categorical, ordinal, and numerical).
+    Incorporates optional data augmentation and masking.
 
     Args:
         dataset_spec (DatasetSpec): Specification of the dataset.
         Xcat (np.ndarray, optional): Numpy array holding categorical data.
         Xord (np.ndarray, optional): Numpy array holding ordinal data.
         Xnum (np.ndarray, optional): Numpy array holding numerical data.
+        mask_prob (float, optional): Probability that a given input is masked. Default is 0.
+        aug_mult (int, optional): Multiplier for data augmentation. Default is 1.
 
     Attributes:
         dataset_spec (DatasetSpec): Specification of the dataset.
@@ -219,14 +221,20 @@ class MixedDataset(Dataset):
         Xnum (np.ndarray): Numerical data.
         y_data (np.ndarray): Y variable data if it exists.
         num_obs (int): Number of observations in the dataset.
+        mask_prob (float): Probability that a given input is masked.
+        aug_mult (int): Multiplier for data augmentation.
     """
 
     def __init__(self, dataset_spec: DatasetSpec,
                  Xcat: Optional[np.ndarray] = None,
                  Xord: Optional[np.ndarray] = None,
-                 Xnum: Optional[np.ndarray] = None):
+                 Xnum: Optional[np.ndarray] = None,
+                 mask_prob: float = 0,
+                 aug_mult: int = 1):
 
         self.dataset_spec = dataset_spec
+        self.mask_prob = mask_prob
+        self.aug_mult = aug_mult
 
         if Xcat is None and Xord is None and Xnum is None:
             raise ValueError("Xcat, Xord, and Xnum cannot all be None")
@@ -276,58 +284,49 @@ class MixedDataset(Dataset):
         self.Xord = Xord
         self.Xnum = Xnum
 
+
     def __len__(self):
         """
         Returns:
-            Number of observations in the dataset.
+            Adjusted number of observations in the dataset, accounting for data augmentation.
         """
-        return self.num_obs
+        return self.num_obs * self.aug_mult
 
     def __getitem__(self, idx):
         """
         Given an index, retrieves the corresponding item from the MixedDataset. The item is a list consisting of
-        corresponding elements (rows) from Xcat, Xord, Xnum, and y_data (if they exist). 
+        corresponding elements (rows) from Xcat, Xord, Xnum, and y_data (if they exist). Incorporates artificial
+        masking of inputs.
 
         Args:
             idx (int): The index of the item to be fetched.
 
         Returns:
-            list: A list containing elements from Xcat, Xord, Xnum and y_data at the given index. The length of
-                  the list can be either 3 or 4 depending on whether y_data exists.
+            list: A list containing elements from Xcat, Xord, Xnum and y_data at the given index, with artificial
+                  masking applied. The length of the list can be either 3 or 4 depending on whether y_data exists.
         """
 
-        # Initialize an empty list to store the item
+        orig_idx = idx // self.aug_mult
+
         item = []
 
-        # TODO: determine whether it is best/faster to store Xcat (etc.) as
-        #       torch tensors rather than numpy arrays.
-        # Append x_cat (or None)
-        if self.Xcat is not None:
-            item.append(torch.from_numpy(self.Xcat[idx]))
-        else:
-            item.append(None)
-        
-        # Append x_ord (or None)
-        if self.Xord is not None:
-            item.append(torch.from_numpy(self.Xord[idx]))
-        else:
-            item.append(None)
-
-        # Append x_num (or None)
-        if self.Xnum is not None:
-            item.append(torch.from_numpy(self.Xnum[idx]))
-        else:
-            item.append(None)
+        # Apply artificial masking and append elements to the item
+        for X in [self.Xcat, self.Xord, self.Xnum]:
+            if X is not None:
+                x = X[orig_idx, :].copy()
+                mask = np.random.rand(*x.shape) < self.mask_prob
+                x[mask] = 0
+                x = torch.from_numpy(x)
+                item.append(x)
+            else:
+                item.append(None)
 
         # If y_data exists, append the corresponding value to the item
-        # We do not append None if it does not exist.
         if self.y_data is not None:
-            item.append(torch.from_numpy(np.array([self.y_data[idx]],
+            item.append(torch.from_numpy(np.array([self.y_data[orig_idx]],
                                                   dtype=self.y_data.dtype)))
 
-        # Return the item
         return item
-
     def get_arrays(self):
         """
         Return the input arrays Xcat, Xord, Xnum and target y_data.

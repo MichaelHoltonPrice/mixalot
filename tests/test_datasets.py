@@ -299,6 +299,35 @@ class TestMixedDataset(unittest.TestCase):
         np.testing.assert_array_almost_equal(x_num, Xnum)
         self.assertIsNone(y)
 
+    def test_aug_mult(self):
+        # Test data augmentation
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        dataset_spec = DatasetSpec([cat_var], [], [])
+
+        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, aug_mult=2)
+        self.assertEqual(len(mixed_dataset), 4)
+
+    def test_mask_prob(self):
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        dataset_spec = DatasetSpec([cat_var], [], [])
+        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, mask_prob=0.2, aug_mult=1)
+        for idx in range(len(mixed_dataset)):
+            item = mixed_dataset[idx]
+            if mixed_dataset.y_data is not None:
+                x_cat, x_ord, x_num, y = item
+                self.assertTrue((x_cat == 0).sum() <= x_cat.numel() * 0.2)
+                self.assertIsNone(x_ord)
+                self.assertIsNone(x_num)
+                self.assertIsNone(y)
+            else:
+                x_cat, x_ord, x_num = item
+                self.assertTrue((x_cat == 0).sum() <= x_cat.numel() * 0.2)
+                self.assertIsNone(x_ord)
+                self.assertIsNone(x_num)
+
   
 class TestConvertCategoriesToCodes(unittest.TestCase):
 

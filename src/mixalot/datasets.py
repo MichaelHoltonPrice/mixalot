@@ -223,6 +223,7 @@ class MixedDataset(Dataset):
         num_obs (int): Number of observations in the dataset.
         mask_prob (float): Probability that a given input is masked.
         aug_mult (int): Multiplier for data augmentation.
+        require_input (bool): If True, ensures that at least one variable remains unmasked in every item. Default is False.
     """
 
     def __init__(self, dataset_spec: DatasetSpec,
@@ -230,7 +231,8 @@ class MixedDataset(Dataset):
                  Xord: Optional[np.ndarray] = None,
                  Xnum: Optional[np.ndarray] = None,
                  mask_prob: float = 0,
-                 aug_mult: int = 1):
+                 aug_mult: int = 1,
+                 require_input=False):
 
         self.dataset_spec = dataset_spec
         self.mask_prob = mask_prob
@@ -284,6 +286,13 @@ class MixedDataset(Dataset):
         self.Xord = Xord
         self.Xnum = Xnum
 
+        self.require_input = require_input
+
+        # Pre-compute and store the masks for Xcat, Xord, Xnum
+        self.Xcat_mask = None if Xcat is None else (Xcat == 0)
+        self.Xord_mask = None if Xord is None else (Xord == 0)
+        self.Xnum_mask = None if Xnum is None else np.isnan(Xnum)
+
 
     def __len__(self):
         """
@@ -296,37 +305,69 @@ class MixedDataset(Dataset):
         """
         Given an index, retrieves the corresponding item from the MixedDataset. The item is a list consisting of
         corresponding elements (rows) from Xcat, Xord, Xnum, and y_data (if they exist). Incorporates artificial
-        masking of inputs.
-
+        masking of inputs. If require_input is True, ensures that at least one variable remains unmasked.
+    
         Args:
             idx (int): The index of the item to be fetched.
-
+    
         Returns:
             list: A list containing elements from Xcat, Xord, Xnum and y_data at the given index, with artificial
                   masking applied. The length of the list can be either 3 or 4 depending on whether y_data exists.
         """
-
         orig_idx = idx // self.aug_mult
-
         item = []
-
+        all_masked = True  # Keep track if all variables are masked
+        mask_collection = []  # Store artificial masks
+    
         # Apply artificial masking and append elements to the item
-        for X in [self.Xcat, self.Xord, self.Xnum]:
+        for i, X in enumerate([self.Xcat, self.Xord, self.Xnum]):
+            pre_mask = [self.Xcat_mask, self.Xord_mask, self.Xnum_mask][i]
             if X is not None:
                 x = X[orig_idx, :].copy()
+                if pre_mask is not None:
+                    x[pre_mask[orig_idx, :]] = 0
                 mask = np.random.rand(*x.shape) < self.mask_prob
+                mask_collection.append(mask)
                 x[mask] = 0
                 x = torch.from_numpy(x)
                 item.append(x)
+    
+                # Check if all variables in the item are masked
+                if np.any(mask == False) and np.any(pre_mask[orig_idx, :] == False):
+                    all_masked = False
             else:
                 item.append(None)
-
+                mask_collection.append(None)
+    
+        # If all variables are masked and require_input is True, unmask a random variable
+        if self.require_input and all_masked:
+            while all_masked:
+                # Choose a random dataset (Xcat, Xord, Xnum)
+                X_idx = np.random.randint(len([self.Xcat, self.Xord, self.Xnum]))
+    
+                # Skip if the chosen dataset is None
+                if [self.Xcat, self.Xord, self.Xnum][X_idx] is None:
+                    continue
+    
+                # Choose a random variable within the chosen dataset
+                variable_idx = np.random.randint([self.Xcat, self.Xord, self.Xnum][X_idx].shape[1])
+    
+                # Skip if the chosen variable is pre-masked
+                if [self.Xcat_mask, self.Xord_mask, self.Xnum_mask][X_idx][orig_idx, variable_idx]:
+                    continue
+    
+                # Unmask the chosen variable
+                mask_collection[X_idx][variable_idx] = False
+                item[X_idx][variable_idx] = [self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]
+    
+                all_masked = False
+    
         # If y_data exists, append the corresponding value to the item
         if self.y_data is not None:
-            item.append(torch.from_numpy(np.array([self.y_data[orig_idx]],
-                                                  dtype=self.y_data.dtype)))
-
+            item.append(torch.from_numpy(np.array([self.y_data[orig_idx]], dtype=self.y_data.dtype)))
+    
         return item
+
     def get_arrays(self):
         """
         Return the input arrays Xcat, Xord, Xnum and target y_data.

@@ -314,19 +314,51 @@ class TestMixedDataset(unittest.TestCase):
         dataset_spec = DatasetSpec([cat_var], [], [])
         Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, mask_prob=0.2, aug_mult=1)
-        for idx in range(len(mixed_dataset)):
-            item = mixed_dataset[idx]
-            if mixed_dataset.y_data is not None:
-                x_cat, x_ord, x_num, y = item
-                self.assertTrue((x_cat == 0).sum() <= x_cat.numel() * 0.2)
-                self.assertIsNone(x_ord)
-                self.assertIsNone(x_num)
-                self.assertIsNone(y)
-            else:
-                x_cat, x_ord, x_num = item
-                self.assertTrue((x_cat == 0).sum() <= x_cat.numel() * 0.2)
-                self.assertIsNone(x_ord)
-                self.assertIsNone(x_num)
+    
+        num_samples = 1000
+        mask_fractions = []
+    
+        for _ in range(num_samples):
+            item = mixed_dataset[0]
+            x_cat = item[0]
+    
+            # If there are unmasked elements, ensure they match the original values.
+            if (x_cat != 0).any():
+                self.assertTrue(np.all((x_cat[x_cat != 0].numpy() == Xcat[0, x_cat != 0])))
+            
+            mask_fractions.append((x_cat == 0).float().mean().item())
+    
+        avg_mask_fraction = np.mean(mask_fractions)
+    
+        self.assertTrue(np.abs(avg_mask_fraction - mixed_dataset.mask_prob) < 0.01)
+
+    def test_require_input(self):
+        # Test that require_input functionality results in at least one unmasked variable
+        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+    
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+    
+        Xcat = np.random.randint(1, 10, (100, 2), dtype=np.int32)
+        Xord = np.random.randint(1, 10, (100, 2), dtype=np.int32)
+        Xnum = np.random.random((100, 1)).astype(np.float32)
+    
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum, mask_prob=0.99, require_input=True)
+    
+        for i in range(len(mixed_dataset)):
+            sample = mixed_dataset[i]
+            sample_Xcat, sample_Xord, sample_Xnum, _ = sample
+            all_masked = True
+    
+            if sample_Xcat is not None and np.any(sample_Xcat.numpy() != 0):
+                all_masked = False
+            if sample_Xord is not None and np.any(sample_Xord.numpy() != 0):
+                all_masked = False
+            if sample_Xnum is not None and np.any(sample_Xnum.numpy() != 0):
+                all_masked = False
+    
+            self.assertFalse(all_masked)
 
   
 class TestConvertCategoriesToCodes(unittest.TestCase):

@@ -255,6 +255,19 @@ class MixedDataset(Dataset):
             raise ValueError("Xord should have dtype int32")
         if Xnum is not None and Xnum.dtype != np.float32:
             raise ValueError("Xnum should have dtype float32")
+        
+        # Ensure that each input has the correct number of columns
+        for var_type, X, s in zip(['categorical', 'ordinal', 'numerical'],
+                                  [Xcat, Xord, Xnum],
+                                  ['Xcat', 'Xord', 'Xnum']):
+            num_var_ds = len(dataset_spec.get_ordered_variables(var_type))
+            if X is None:
+                num_var_mat = 0
+            else:
+                num_var_mat = X.shape[1]
+
+            if num_var_ds != num_var_mat:
+                raise ValueError(f'{s} has {num_var_mat} columns but dataset_spec has {num_var_ds} {var_type} variables')
 
         # Extract y from the relevant dataset and store separately, if it exists
         if dataset_spec.y_var is not None:
@@ -304,15 +317,15 @@ class MixedDataset(Dataset):
     def __getitem__(self, idx):
         """
         Given an index, retrieves the corresponding item from the MixedDataset. The item is a list consisting of
-        corresponding elements (rows) from Xcat, Xord, Xnum, and y_data (if they exist). Incorporates artificial
-        masking of inputs. If require_input is True, ensures that at least one variable remains unmasked.
+        corresponding elements (rows) from Xcat, Xord, Xnum, a mask for numerical variables, and y_data (if they exist). 
+        Incorporates artificial masking of inputs. If require_input is True, ensures that at least one variable remains unmasked.
     
         Args:
             idx (int): The index of the item to be fetched.
     
         Returns:
-            list: A list containing elements from Xcat, Xord, Xnum and y_data at the given index, with artificial
-                  masking applied. The length of the list can be either 3 or 4 depending on whether y_data exists.
+            list: A list containing elements from Xcat, Xord, Xnum, a mask for numerical variables, and y_data at the given index,
+                  with artificial masking applied. The length of the list can be either 4 or 5 depending on whether y_data exists.
         """
         orig_idx = idx // self.aug_mult
         item = []
@@ -358,9 +371,18 @@ class MixedDataset(Dataset):
     
                 # Unmask the chosen variable
                 mask_collection[X_idx][variable_idx] = False
-                item[X_idx][variable_idx] = [self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]
+                #item[X_idx][variable_idx] = [self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]
+                item[X_idx][variable_idx] = torch.from_numpy(np.array([self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]))
+
     
                 all_masked = False
+    
+        # Convert mask of numerical variables to tensor and append to item
+        if self.Xnum is not None:
+            num_mask = torch.from_numpy(~mask_collection[2])
+            item.append(num_mask)
+        else:
+            item.append(None)
     
         # If y_data exists, append the corresponding value to the item
         if self.y_data is not None:

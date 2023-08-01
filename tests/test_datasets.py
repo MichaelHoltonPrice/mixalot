@@ -188,14 +188,16 @@ class TestMixedDataset(unittest.TestCase):
 
     def test_init(self):
         # Test initialization with and without y_var.
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
-        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var1 = VarSpec('ord_var1', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var2 = VarSpec('ord_var2', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
         num_var = VarSpec('num_var', 'numerical')
 
-        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [ord_var1, ord_var2], [num_var], y_var='num_var')
 
-        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
-        Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)
         Xnum = np.array([[9], [10]], dtype=np.float32)
         expected_y_data = np.array([9, 10], dtype=np.float32)
 
@@ -209,54 +211,79 @@ class TestMixedDataset(unittest.TestCase):
 
     def test_len(self):
         # Test length
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
-        dataset_spec = DatasetSpec([cat_var], [], [])
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [])
 
-        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
 
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat)
         self.assertEqual(len(mixed_dataset), 2)
 
     def test_getitem(self):
         # Test item fetching
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
-        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var1 = VarSpec('ord_var1', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var2 = VarSpec('ord_var2', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
         num_var = VarSpec('num_var', 'numerical')
     
-        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [ord_var1, ord_var2], [num_var], y_var='num_var')
     
-        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
-        Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)
         Xnum = np.array([[9], [10]], dtype=np.float32)
         expected_y_data = torch.from_numpy(np.array([9], dtype=np.float32))
     
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
         
-        x_cat, x_ord, x_num, y = mixed_dataset[0]
+        x_cat, x_ord, x_num, m_num, y = mixed_dataset[0]
         # Check the value of x_cat
         self.assertTrue((x_cat == torch.from_numpy(Xcat[0])).all())
         # Check the value of x_ord
         self.assertTrue((x_ord == torch.from_numpy(Xord[0])).all())
         # Check the value of x_num
         self.assertEqual(x_num, None)
+        # Check the value of m_num
+        self.assertEqual(m_num, None)
         # Check the value of y
         self.assertTrue((y == expected_y_data).all())
 
-    def test_inconsistent_shapes(self):
+    def test_inconsistent_rows(self):
         # Test inconsistent shapes
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
-        ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var1 = VarSpec('ord_var1', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var2 = VarSpec('ord_var2', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
         num_var = VarSpec('num_var', 'numerical')
 
-        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [ord_var1, ord_var2], [num_var], y_var='num_var')
 
-        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
-        Xord = np.array([[5, 6], [7, 8]], dtype=np.int32)
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)
         Xnum = np.array([[9]])
 
         with self.assertRaises(ValueError) as cm:
             mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
         self.assertEqual(str(cm.exception), "Input arrays do not have the same number of samples")
+
+    def test_inconsistent_columns(self):
+        # Test inconsistent shapes
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var1 = VarSpec('ord_var1', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        ord_var2 = VarSpec('ord_var2', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        num_var = VarSpec('num_var', 'numerical')
+
+        dataset_spec = DatasetSpec([cat_var1], [ord_var1, ord_var2], [num_var], y_var='num_var')
+
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)
+        Xnum = np.array([[9], [10]], dtype=np.float32)
+
+        with self.assertRaises(ValueError) as cm:
+            mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
+        self.assertEqual(str(cm.exception), "Xcat has 2 columns but dataset_spec has 1 categorical variables")
+
 
     def test_get_arrays_with_y(self):
         cat_var1 = VarSpec('cat1', 'categorical', [{'A','B'}])  
@@ -265,7 +292,7 @@ class TestMixedDataset(unittest.TestCase):
     
         dataset_spec = DatasetSpec([cat_var1], [], [num_var1, num_var2], y_var='num1')
     
-        Xcat = np.random.randint(0, 2, (10, 1), dtype=np.int32)  
+        Xcat = np.random.randint(1, 3, (10, 1), dtype=np.int32)  
         Xnum = np.random.randn(10, 2).astype(np.float32)
     
         dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xnum=Xnum)
@@ -287,7 +314,7 @@ class TestMixedDataset(unittest.TestCase):
     
         dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [num_var1, num_var2, num_var3])
     
-        Xcat = np.random.randint(0, 2, (10, 2), dtype=np.int32)
+        Xcat = np.random.randint(1, 3, (10, 2), dtype=np.int32)
         Xnum = np.random.randn(10, 3).astype(np.float32)
     
         dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xnum=Xnum)
@@ -301,21 +328,25 @@ class TestMixedDataset(unittest.TestCase):
 
     def test_aug_mult(self):
         # Test data augmentation
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
-        dataset_spec = DatasetSpec([cat_var], [], [])
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [])
 
-        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
 
-        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, aug_mult=2)
-        self.assertEqual(len(mixed_dataset), 4)
+        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, aug_mult=3)
+        self.assertEqual(len(mixed_dataset), 6)
 
     def test_mask_prob(self):
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
-        dataset_spec = DatasetSpec([cat_var], [], [])
-        Xcat = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [])
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, mask_prob=0.2, aug_mult=1)
     
-        num_samples = 1000
+        # TODO: This will sometimes fail just by chance, though that should be exceedingly
+        #       rare (maybe even vanishingly rare)
+        num_samples = 10000
         mask_fractions = []
     
         for _ in range(num_samples):
@@ -334,28 +365,33 @@ class TestMixedDataset(unittest.TestCase):
 
     def test_require_input(self):
         # Test that require_input functionality results in at least one unmasked variable
-        cat_var = VarSpec('cat_var', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var1 = VarSpec('cat_var1', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
+        cat_var2 = VarSpec('cat_var2', 'categorical', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
         ord_var = VarSpec('ord_var', 'ordinal', categorical_mapping=[{'A', 'B'}, {'C', 'D'}])
         num_var = VarSpec('num_var', 'numerical')
     
-        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var], y_var='num_var')
+        dataset_spec = DatasetSpec([cat_var1,cat_var2], [ord_var], [num_var], y_var='ord_var')
     
-        Xcat = np.random.randint(1, 10, (100, 2), dtype=np.int32)
-        Xord = np.random.randint(1, 10, (100, 2), dtype=np.int32)
+        Xcat = np.random.randint(1, 3, (100, 2), dtype=np.int32)
+        Xord = np.random.randint(1, 3, (100, 1), dtype=np.int32)
         Xnum = np.random.random((100, 1)).astype(np.float32)
     
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum, mask_prob=0.99, require_input=True)
     
         for i in range(len(mixed_dataset)):
             sample = mixed_dataset[i]
-            sample_Xcat, sample_Xord, sample_Xnum, _ = sample
+            sample_Xcat, sample_Xord, sample_Xnum, sample_Mnum, sample_y = sample
             all_masked = True
     
-            if sample_Xcat is not None and np.any(sample_Xcat.numpy() != 0):
+            assert sample_Xcat is not None
+            if np.any(sample_Xcat.numpy() != 0):
                 all_masked = False
-            if sample_Xord is not None and np.any(sample_Xord.numpy() != 0):
-                all_masked = False
-            if sample_Xnum is not None and np.any(sample_Xnum.numpy() != 0):
+
+            assert sample_Xord is None
+
+            # Check numerical values are unmasked using the mask
+            assert sample_Xnum is not None
+            if np.any(sample_Mnum.numpy() == True):
                 all_masked = False
     
             self.assertFalse(all_masked)

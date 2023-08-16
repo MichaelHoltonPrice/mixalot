@@ -21,6 +21,7 @@ setup(
     #python_requires=">=3.6",
     install_requires=[
         'numpy',
+        'openpyxl',
         'pandas',
         'scikit-learn',
         'torch',

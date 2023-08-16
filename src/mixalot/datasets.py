@@ -201,6 +201,7 @@ class DatasetSpec:
         y_var = json_dict.get('y_var', None)
         return cls(cat_var_specs, ord_var_specs, num_var_specs, y_var)
 
+
 class MixedDataset(Dataset):
     """
     A class to hold and manage mixed types of data (categorical, ordinal, and numerical).
@@ -213,6 +214,7 @@ class MixedDataset(Dataset):
         Xnum (np.ndarray, optional): Numpy array holding numerical data.
         mask_prob (float, optional): Probability that a given input is masked. Default is 0.
         aug_mult (int, optional): Multiplier for data augmentation. Default is 1.
+        device (str, optional): The torch device to use. Default is cpu.
 
     Attributes:
         dataset_spec (DatasetSpec): Specification of the dataset.
@@ -232,11 +234,13 @@ class MixedDataset(Dataset):
                  Xnum: Optional[np.ndarray] = None,
                  mask_prob: float = 0,
                  aug_mult: int = 1,
-                 require_input=False):
+                 require_input=False,
+                 device='cpu'):
 
         self.dataset_spec = dataset_spec
         self.mask_prob = mask_prob
         self.aug_mult = aug_mult
+        self.device = torch.device(device)
 
         if Xcat is None and Xord is None and Xnum is None:
             raise ValueError("Xcat, Xord, and Xnum cannot all be None")
@@ -306,6 +310,23 @@ class MixedDataset(Dataset):
         self.Xord_mask = None if Xord is None else (Xord == 0)
         self.Xnum_mask = None if Xnum is None else np.isnan(Xnum)
 
+        # Place matrices on the torch device
+        if self.Xcat is not None:
+            self.Xcat = torch.tensor(self.Xcat, device=self.device)
+        if self.Xord is not None:
+            self.Xord = torch.tensor(self.Xord, device=self.device)
+        if self.Xnum is not None:
+            self.Xnum = torch.tensor(self.Xnum, device=self.device)
+        if self.y_data is not None:
+            self.y_data = torch.tensor(self.y_data, device=self.device)
+        
+        if self.Xcat_mask is not None:
+            self.Xcat_mask = torch.tensor(self.Xcat_mask, dtype=torch.bool, device=self.device)
+        if self.Xord_mask is not None:
+            self.Xord_mask = torch.tensor(self.Xord_mask, dtype=torch.bool, device=self.device)
+        if self.Xnum_mask is not None:
+            self.Xnum_mask = torch.tensor(self.Xnum_mask, dtype=torch.bool, device=self.device)
+
 
     def __len__(self):
         """
@@ -313,6 +334,7 @@ class MixedDataset(Dataset):
             Adjusted number of observations in the dataset, accounting for data augmentation.
         """
         return self.num_obs * self.aug_mult
+
 
     def __getitem__(self, idx):
         """
@@ -329,24 +351,25 @@ class MixedDataset(Dataset):
         """
         orig_idx = idx // self.aug_mult
         item = []
-        all_masked = True  # Keep track if all variables are masked
-        mask_collection = []  # Store artificial masks
+        all_masked = True
+        mask_collection = []
     
         # Apply artificial masking and append elements to the item
         for i, X in enumerate([self.Xcat, self.Xord, self.Xnum]):
             pre_mask = [self.Xcat_mask, self.Xord_mask, self.Xnum_mask][i]
             if X is not None:
-                x = X[orig_idx, :].copy()
+                x = X[orig_idx, :].clone()
                 if pre_mask is not None:
                     x[pre_mask[orig_idx, :]] = 0
-                mask = np.random.rand(*x.shape) < self.mask_prob
+                mask_float = torch.rand_like(x.to(torch.float32), device=self.device)
+                mask = mask_float < self.mask_prob
+                #mask = torch.rand_like(x, device=self.device) < self.mask_prob
                 mask_collection.append(mask)
                 x[mask] = 0
-                x = torch.from_numpy(x)
                 item.append(x)
     
                 # Check if all variables in the item are masked
-                if np.any(mask == False) and np.any(pre_mask[orig_idx, :] == False):
+                if torch.any(mask == False) and torch.any(pre_mask[orig_idx, :] == False):
                     all_masked = False
             else:
                 item.append(None)
@@ -356,14 +379,14 @@ class MixedDataset(Dataset):
         if self.require_input and all_masked:
             while all_masked:
                 # Choose a random dataset (Xcat, Xord, Xnum)
-                X_idx = np.random.randint(len([self.Xcat, self.Xord, self.Xnum]))
+                X_idx = torch.randint(len([self.Xcat, self.Xord, self.Xnum]), (1,)).item()
     
                 # Skip if the chosen dataset is None
                 if [self.Xcat, self.Xord, self.Xnum][X_idx] is None:
                     continue
     
                 # Choose a random variable within the chosen dataset
-                variable_idx = np.random.randint([self.Xcat, self.Xord, self.Xnum][X_idx].shape[1])
+                variable_idx = torch.randint([self.Xcat, self.Xord, self.Xnum][X_idx].shape[1], (1,)).item()
     
                 # Skip if the chosen variable is pre-masked
                 if [self.Xcat_mask, self.Xord_mask, self.Xnum_mask][X_idx][orig_idx, variable_idx]:
@@ -371,22 +394,20 @@ class MixedDataset(Dataset):
     
                 # Unmask the chosen variable
                 mask_collection[X_idx][variable_idx] = False
-                #item[X_idx][variable_idx] = [self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]
-                item[X_idx][variable_idx] = torch.from_numpy(np.array([self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]))
-
+                item[X_idx][variable_idx] = [self.Xcat, self.Xord, self.Xnum][X_idx][orig_idx, variable_idx]
     
                 all_masked = False
     
-        # Convert mask of numerical variables to tensor and append to item
+        # Append mask of numerical variables to item
         if self.Xnum is not None:
-            num_mask = torch.from_numpy(~mask_collection[2])
+            num_mask = ~mask_collection[2]
             item.append(num_mask)
         else:
             item.append(None)
     
         # If y_data exists, append the corresponding value to the item
         if self.y_data is not None:
-            item.append(torch.from_numpy(np.array([self.y_data[orig_idx]], dtype=self.y_data.dtype)))
+            item.append(self.y_data[orig_idx].unsqueeze(0))
     
         return item
 

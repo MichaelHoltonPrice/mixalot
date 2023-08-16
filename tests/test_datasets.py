@@ -204,10 +204,11 @@ class TestMixedDataset(unittest.TestCase):
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
 
         self.assertEqual(mixed_dataset.dataset_spec, dataset_spec)
-        self.assertTrue((mixed_dataset.Xcat == Xcat).all())
-        self.assertTrue((mixed_dataset.Xord == Xord).all())
+
+        self.assertTrue(torch.all(mixed_dataset.Xcat == torch.tensor(Xcat)))
+        self.assertTrue(torch.all(mixed_dataset.Xord == torch.tensor(Xord)))
         self.assertTrue(mixed_dataset.Xnum is None)
-        self.assertTrue((mixed_dataset.y_data == expected_y_data).all())
+        self.assertTrue(torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data)))
 
     def test_len(self):
         # Test length

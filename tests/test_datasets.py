@@ -201,14 +201,21 @@ class TestMixedDataset(unittest.TestCase):
         Xnum = np.array([[9], [10]], dtype=np.float32)
         expected_y_data = np.array([9, 10], dtype=np.float32)
 
-        mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, Xord=Xord, Xnum=Xnum)
-
-        self.assertEqual(mixed_dataset.dataset_spec, dataset_spec)
-
-        self.assertTrue(torch.all(mixed_dataset.Xcat == torch.tensor(Xcat)))
-        self.assertTrue(torch.all(mixed_dataset.Xord == torch.tensor(Xord)))
-        self.assertTrue(mixed_dataset.Xnum is None)
-        self.assertTrue(torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data)))
+        # Assume that both a CPU and GPU you are available
+        for device_str in ['cpu', 'cuda']:
+            device = torch.device(device_str)
+            mixed_dataset = MixedDataset(dataset_spec,
+                                         Xcat=Xcat,
+                                         Xord=Xord,
+                                         Xnum=Xnum,
+                                         device=device)
+    
+            self.assertEqual(mixed_dataset.dataset_spec, dataset_spec)
+    
+            self.assertTrue(torch.all(mixed_dataset.Xcat == torch.tensor(Xcat, device=device)))
+            self.assertTrue(torch.all(mixed_dataset.Xord == torch.tensor(Xord, device=device)))
+            self.assertTrue(mixed_dataset.Xnum is None)
+            self.assertTrue(torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data, device=device)))
 
     def test_len(self):
         # Test length

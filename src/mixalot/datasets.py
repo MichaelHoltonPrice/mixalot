@@ -214,7 +214,7 @@ class MixedDataset(Dataset):
         Xnum (np.ndarray, optional): Numpy array holding numerical data.
         mask_prob (float, optional): Probability that a given input is masked. Default is 0.
         aug_mult (int, optional): Multiplier for data augmentation. Default is 1.
-        device (str, optional): The torch device to use. Default is cpu.
+        device (torch.device or str, optional): The torch device object or string to specify the device to use. Default is 'cpu'.
 
     Attributes:
         dataset_spec (DatasetSpec): Specification of the dataset.
@@ -235,12 +235,16 @@ class MixedDataset(Dataset):
                  mask_prob: float = 0,
                  aug_mult: int = 1,
                  require_input=False,
-                 device='cpu'):
+                 device=None):
 
         self.dataset_spec = dataset_spec
         self.mask_prob = mask_prob
         self.aug_mult = aug_mult
-        self.device = torch.device(device)
+
+        if device is None:
+            self.device = torch.device('cpu')
+        else:
+            self.device = device
 
         if Xcat is None and Xord is None and Xnum is None:
             raise ValueError("Xcat, Xord, and Xnum cannot all be None")

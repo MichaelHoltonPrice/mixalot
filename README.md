@@ -11,6 +11,8 @@ pip install .
 ```
 
 # Run tests
+The tests assume that both a CPU and GPU device are available to torch.
+
 ```console
 python -m unittest discover tests
 ```

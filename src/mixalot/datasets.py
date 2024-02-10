@@ -257,11 +257,11 @@ class MixedDataset(Dataset):
         self.num_obs = num_obs_list.pop()
 
         # Validate and enforce data types of inputs
-        if Xcat is not None and Xcat.dtype != np.int32:
+        if Xcat is not None and not Xcat.dtype in [np.int32, torch.int32]:
             raise ValueError("Xcat should have dtype int32")
-        if Xord is not None and Xord.dtype != np.int32:
+        if Xord is not None and not Xord.dtype in [np.int32, torch.int32]:
             raise ValueError("Xord should have dtype int32")
-        if Xnum is not None and Xnum.dtype != np.float32:
+        if Xnum is not None and not Xnum.dtype in [np.float32, torch.float32]:
             raise ValueError("Xnum should have dtype float32")
         
         # Ensure that each input has the correct number of columns

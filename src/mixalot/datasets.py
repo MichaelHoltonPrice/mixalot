@@ -227,8 +227,7 @@ class MixedDataset(Dataset):
         aug_mult (int): Multiplier for data augmentation.
         require_input (bool): If True, ensures that at least one variable remains unmasked in every item. Default is False.
     """
-
-    def __init__(self, dataset_spec: DatasetSpec,
+    def __init__(self, dataset_spec: 'DatasetSpec',
                  Xcat: Optional[np.ndarray] = None,
                  Xord: Optional[np.ndarray] = None,
                  Xnum: Optional[np.ndarray] = None,
@@ -240,30 +239,25 @@ class MixedDataset(Dataset):
         self.dataset_spec = dataset_spec
         self.mask_prob = mask_prob
         self.aug_mult = aug_mult
-
-        if device is None:
-            self.device = torch.device('cpu')
-        else:
-            self.device = device
+        self.require_input = require_input
+        self.device = torch.device('cpu') if device is None else torch.device(device)
 
         if Xcat is None and Xord is None and Xnum is None:
             raise ValueError("Xcat, Xord, and Xnum cannot all be None")
-        
-        # Ensure all arrays have the same number of samples
-        num_obs_list = set([len(X) for X in [Xcat, Xord, Xnum] if X is not None])
 
+        # Convert tensors to numpy if they are tensors. While this is mildly inefficient
+        # (since they are ultimately converted to tensors below) it does make the code easier
+        # to understand and maintain.
+        Xcat = Xcat.cpu().numpy() if isinstance(Xcat, torch.Tensor) else Xcat
+        Xord = Xord.cpu().numpy() if isinstance(Xord, torch.Tensor) else Xord
+        Xnum = Xnum.cpu().numpy() if isinstance(Xnum, torch.Tensor) else Xnum
+
+
+        num_obs_list = {len(X) for X in [Xcat, Xord, Xnum] if X is not None}
         if len(num_obs_list) > 1:
             raise ValueError("Input arrays do not have the same number of samples")
         self.num_obs = num_obs_list.pop()
 
-        # Validate and enforce data types of inputs
-        if Xcat is not None and not Xcat.dtype in [np.int32, torch.int32]:
-            raise ValueError("Xcat should have dtype int32")
-        if Xord is not None and not Xord.dtype in [np.int32, torch.int32]:
-            raise ValueError("Xord should have dtype int32")
-        if Xnum is not None and not Xnum.dtype in [np.float32, torch.float32]:
-            raise ValueError("Xnum should have dtype float32")
-        
         # Ensure that each input has the correct number of columns
         for var_type, X, s in zip(['categorical', 'ordinal', 'numerical'],
                                   [Xcat, Xord, Xnum],
@@ -277,60 +271,38 @@ class MixedDataset(Dataset):
             if num_var_ds != num_var_mat:
                 raise ValueError(f'{s} has {num_var_mat} columns but dataset_spec has {num_var_ds} {var_type} variables')
 
-        # Extract y from the relevant dataset and store separately, if it exists
+
+
+        # Extract y_data before converting to tensor and moving to device
         if dataset_spec.y_var is not None:
             if dataset_spec.y_var in dataset_spec.get_ordered_variables('categorical'):
                 y_idx = dataset_spec.get_ordered_variables('categorical').index(dataset_spec.y_var)
                 self.y_data = Xcat[:, y_idx].copy()
-                if Xcat.shape[1] == 1:
-                    Xcat = None
-                else:
-                    Xcat = np.delete(Xcat, y_idx, axis=1)
+                Xcat = np.delete(Xcat, y_idx, axis=1) if Xcat.shape[1] > 1 else None
             elif dataset_spec.y_var in dataset_spec.get_ordered_variables('ordinal'):
                 y_idx = dataset_spec.get_ordered_variables('ordinal').index(dataset_spec.y_var)
                 self.y_data = Xord[:, y_idx].copy()
-                if Xord.shape[1] == 1:
-                    Xord = None
-                else:
-                    Xord = np.delete(Xord, y_idx, axis=1)
+                Xord = np.delete(Xord, y_idx, axis=1) if Xord.shape[1] > 1 else None
             elif dataset_spec.y_var in dataset_spec.get_ordered_variables('numerical'):
                 y_idx = dataset_spec.get_ordered_variables('numerical').index(dataset_spec.y_var)
                 self.y_data = Xnum[:, y_idx].copy()
-                if Xnum.shape[1] == 1:
-                    Xnum = None
-                else:
-                    Xnum = np.delete(Xnum, y_idx, axis=1)
+                Xnum = np.delete(Xnum, y_idx, axis=1) if Xnum.shape[1] > 1 else None
         else:
             self.y_data = None
 
-        self.Xcat = Xcat
-        self.Xord = Xord
-        self.Xnum = Xnum
+        # Convert numpy arrays to tensors and move to device
+        self.Xcat = torch.tensor(Xcat, device=self.device).long() if Xcat is not None else None
+        self.Xord = torch.tensor(Xord, device=self.device).long() if Xord is not None else None
+        self.Xnum = torch.tensor(Xnum, device=self.device).float() if Xnum is not None else None
 
-        self.require_input = require_input
-
-        # Pre-compute and store the masks for Xcat, Xord, Xnum
-        self.Xcat_mask = None if Xcat is None else (Xcat == 0)
-        self.Xord_mask = None if Xord is None else (Xord == 0)
-        self.Xnum_mask = None if Xnum is None else np.isnan(Xnum)
-
-        # Place matrices on the torch device
-        if self.Xcat is not None:
-            self.Xcat = torch.tensor(self.Xcat, device=self.device)
-        if self.Xord is not None:
-            self.Xord = torch.tensor(self.Xord, device=self.device)
-        if self.Xnum is not None:
-            self.Xnum = torch.tensor(self.Xnum, device=self.device)
+        # Convert y_data to tensor and move to device
         if self.y_data is not None:
-            self.y_data = torch.tensor(self.y_data, device=self.device)
-        
-        if self.Xcat_mask is not None:
-            self.Xcat_mask = torch.tensor(self.Xcat_mask, dtype=torch.bool, device=self.device)
-        if self.Xord_mask is not None:
-            self.Xord_mask = torch.tensor(self.Xord_mask, dtype=torch.bool, device=self.device)
-        if self.Xnum_mask is not None:
-            self.Xnum_mask = torch.tensor(self.Xnum_mask, dtype=torch.bool, device=self.device)
+            self.y_data = torch.tensor(self.y_data, device=self.device).float()
 
+        # Create masks as tensors and move to device
+        self.Xcat_mask = torch.tensor(Xcat == 0, dtype=torch.bool, device=self.device) if Xcat is not None else None
+        self.Xord_mask = torch.tensor(Xord == 0, dtype=torch.bool, device=self.device) if Xord is not None else None
+        self.Xnum_mask = torch.tensor(np.isnan(Xnum), dtype=torch.bool, device=self.device) if Xnum is not None else None
 
     def __len__(self):
         """

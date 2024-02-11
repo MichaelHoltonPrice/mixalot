@@ -276,14 +276,17 @@ class MixedDataset(Dataset):
         # Extract y_data before converting to tensor and moving to device
         if dataset_spec.y_var is not None:
             if dataset_spec.y_var in dataset_spec.get_ordered_variables('categorical'):
+                y_var_type = 'categorical'
                 y_idx = dataset_spec.get_ordered_variables('categorical').index(dataset_spec.y_var)
                 self.y_data = Xcat[:, y_idx].copy()
                 Xcat = np.delete(Xcat, y_idx, axis=1) if Xcat.shape[1] > 1 else None
             elif dataset_spec.y_var in dataset_spec.get_ordered_variables('ordinal'):
+                y_var_type = 'ordinal'
                 y_idx = dataset_spec.get_ordered_variables('ordinal').index(dataset_spec.y_var)
                 self.y_data = Xord[:, y_idx].copy()
                 Xord = np.delete(Xord, y_idx, axis=1) if Xord.shape[1] > 1 else None
             elif dataset_spec.y_var in dataset_spec.get_ordered_variables('numerical'):
+                y_var_type = 'numerical'
                 y_idx = dataset_spec.get_ordered_variables('numerical').index(dataset_spec.y_var)
                 self.y_data = Xnum[:, y_idx].copy()
                 Xnum = np.delete(Xnum, y_idx, axis=1) if Xnum.shape[1] > 1 else None
@@ -297,7 +300,11 @@ class MixedDataset(Dataset):
 
         # Convert y_data to tensor and move to device
         if self.y_data is not None:
-            self.y_data = torch.tensor(self.y_data, device=self.device).float()
+            if y_var_type == 'numerical':
+                self.y_data = torch.tensor(self.y_data, device=self.device).float()
+            else:
+                assert y_var_type in ['categorical', 'ordinal']
+                self.y_data = torch.tensor(self.y_data, device=self.device).long()
 
         # Create masks as tensors and move to device
         self.Xcat_mask = torch.tensor(Xcat == 0, dtype=torch.bool, device=self.device) if Xcat is not None else None

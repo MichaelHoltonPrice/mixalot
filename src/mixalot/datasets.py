@@ -11,7 +11,7 @@ class VarSpec:
     """
     Represents the specifications of a variable in a dataset.
 
-    Each VarSpec object captures the variable name, its type (numerical, ttttttttttt, or ordinal), 
+    Each VarSpec object captures the variable name, its type (numerical, categorical, or ordinal), 
     a mapping for categorical variables (if applicable), any missing values, and the order of the variable.
 
     Args:

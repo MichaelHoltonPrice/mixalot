@@ -1,3 +1,4 @@
 build
 src/mixalot.egg-info
 *__pycache__*
+venv

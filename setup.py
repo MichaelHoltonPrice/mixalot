@@ -23,6 +23,7 @@ setup(
         'numpy>=1.20,<2',
         'openpyxl',
         'pandas',
+        'pytest',
         'scikit-learn',
         'torch>=1.8,<2',
     ],

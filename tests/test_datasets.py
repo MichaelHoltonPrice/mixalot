@@ -1,10 +1,10 @@
-# python -m unittest tests.test_datasets
+"""Tests for dataset classes."""
 import json
 import os
 import tempfile
-import unittest
 
 import numpy as np
+import pytest
 import torch
 
 from mixalot.datasets import (
@@ -15,67 +15,64 @@ from mixalot.datasets import (
 from mixalot.models import RandomForestSpec
 
 
-class TestVarSpec(unittest.TestCase):
+class TestVarSpec:
     """Tests for VarSpec class."""
 
     def test_valid_inputs(self):
-        # Test valid inputs
+        """Test valid inputs."""
         cat_var = VarSpec('cat_var',
                           'categorical',
                           categorical_mapping=[{'A', 'B'}, {'C', 'D'}],
                           column_name='other_name')
-        self.assertEqual(cat_var.var_name, 'cat_var')
-        self.assertEqual(cat_var.var_type, 'categorical')
-        self.assertEqual(cat_var.categorical_mapping, [{'A', 'B'}, {'C', 'D'}])
-        self.assertIsNone(cat_var.missing_values)
-        self.assertEqual(cat_var.column_name, 'other_name')
+        assert cat_var.var_name == 'cat_var'
+        assert cat_var.var_type == 'categorical'
+        assert cat_var.categorical_mapping == [{'A', 'B'}, {'C', 'D'}]
+        assert cat_var.missing_values is None
+        assert cat_var.column_name == 'other_name'
 
         ord_var = VarSpec('ord_var',
                           'ordinal',
                           categorical_mapping=[{'A', 'B'}, {'C', 'D'}],
                           missing_values=['Also NA'])
-        self.assertEqual(ord_var.var_name, 'ord_var')
-        self.assertEqual(ord_var.var_type, 'ordinal')
-        self.assertEqual(ord_var.categorical_mapping, [{'A', 'B'}, {'C', 'D'}])
-        self.assertEqual(ord_var.missing_values, ['Also NA'])
-        self.assertIsNone(ord_var.column_name)
+        assert ord_var.var_name == 'ord_var'
+        assert ord_var.var_type == 'ordinal'
+        assert ord_var.categorical_mapping == [{'A', 'B'}, {'C', 'D'}]
+        assert ord_var.missing_values == ['Also NA']
+        assert ord_var.column_name is None
 
         num_var = VarSpec('num_var',
                           'numerical')
-        self.assertEqual(num_var.var_name, 'num_var')
-        self.assertEqual(num_var.var_type, 'numerical')
-        self.assertIsNone(num_var.categorical_mapping)
-        self.assertIsNone(num_var.missing_values)
-        self.assertIsNone(num_var.column_name)
+        assert num_var.var_name == 'num_var'
+        assert num_var.var_type == 'numerical'
+        assert num_var.categorical_mapping is None
+        assert num_var.missing_values is None
+        assert num_var.column_name is None
 
     def test_invalid_inputs(self):
-        # Test invalid inputs
-        with self.assertRaises(ValueError) as cm:
-            invalid_var_type = VarSpec('inv_var', 'invalid')
-        self.assertEqual(
-            str(cm.exception),
-            ("Invalid 'type' field for variable inv_var. Expected "
-             "'numerical', 'categorical', or 'ordinal'")
+        """Test invalid inputs."""
+        with pytest.raises(ValueError) as excinfo:
+            VarSpec('inv_var', 'invalid')
+        assert str(excinfo.value) == (
+            "Invalid 'type' field for variable inv_var. "
+            "Expected 'numerical', 'categorical', or 'ordinal'"
         )
 
-        with self.assertRaises(ValueError) as cm:
-            missing_mapping = VarSpec('cat_var', 'categorical')
-        self.assertEqual(
-            str(cm.exception),
-            ("Missing 'categorical_mapping' field for variable cat_var of "
-            "type categorical")
+        with pytest.raises(ValueError) as excinfo:
+            VarSpec('cat_var', 'categorical')
+        assert str(excinfo.value) == (
+            "Missing 'categorical_mapping' field for variable "
+            "cat_var of type categorical"
         )
 
-        with self.assertRaises(ValueError) as cm:
-            _ = VarSpec('cat_var',
-                        'categorical',
-                        categorical_mapping=[{'A', 'B'}, {'B', 'C'}])
-            raise ValueError(
-                f"Some values appear in more than one set for variable cat_var"
-            )
+        with pytest.raises(ValueError) as excinfo:
+            VarSpec('cat_var',
+                    'categorical',
+                    categorical_mapping=[{'A', 'B'}, {'B', 'C'}])
+        assert "Some values appear in more than one set for"\
+            in str(excinfo.value)
 
 
-class TestDatasetSpec(unittest.TestCase):
+class TestDatasetSpec:
     """Tests for the DatasetSpec class."""
 
     def test_valid_inputs(self):
@@ -88,20 +85,13 @@ class TestDatasetSpec(unittest.TestCase):
         
         dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var])
         
-        self.assertListEqual(
-            [var.var_name for var in dataset_spec.cat_var_specs], 
+        assert [var.var_name for var in dataset_spec.cat_var_specs] ==\
             ['cat_var']
-        )
-        self.assertListEqual(
-            [var.var_name for var in dataset_spec.ord_var_specs], 
+        assert [var.var_name for var in dataset_spec.ord_var_specs] ==\
             ['ord_var']
-        )
-        self.assertListEqual(
-            [var.var_name for var in dataset_spec.num_var_specs], 
+        assert [var.var_name for var in dataset_spec.num_var_specs] ==\
             ['num_var']
-        )
-        self.assertSetEqual(dataset_spec.all_var_names, 
-                            {'cat_var', 'ord_var', 'num_var'})
+        assert dataset_spec.all_var_names == {'cat_var', 'ord_var', 'num_var'}
 
     def test_all_var_names_property(self):
         """Test that all_var_names is properly calculated as a property."""
@@ -112,42 +102,41 @@ class TestDatasetSpec(unittest.TestCase):
         
         # Initial dataset with two variables
         dataset_spec = DatasetSpec([cat_var], [ord_var], [])
-        self.assertSetEqual(dataset_spec.all_var_names, {'cat_var', 'ord_var'})
+        assert dataset_spec.all_var_names == {'cat_var', 'ord_var'}
         
         # Add a new variable
         num_var = VarSpec('num_var', 'numerical')
         dataset_spec.num_var_specs.append(num_var)
         
         # Verify all_var_names property updates
-        self.assertSetEqual(dataset_spec.all_var_names, 
-                            {'cat_var', 'ord_var', 'num_var'})
+        assert dataset_spec.all_var_names == {'cat_var', 'ord_var', 'num_var'}
 
     def test_invalid_inputs(self):
         """Test DatasetSpec with invalid inputs."""
         # Test with variable of wrong type
         wrong_var = VarSpec('wrong_var', 'categorical', [{'A', 'B'}])
-        with self.assertRaises(ValueError) as cm:
-            invalid_dataset_spec = DatasetSpec([], [wrong_var], [])
-        self.assertEqual(str(cm.exception), 
-                         "All variable specifications in ordinal_var_specs "
-                         "must be instances of VarSpec of type ordinal")
+        with pytest.raises(ValueError) as excinfo:
+            DatasetSpec([], [wrong_var], [])
+        assert str(excinfo.value) == (
+            "All variable specifications in ordinal_var_specs "
+            "must be instances of VarSpec of type ordinal"
+        )
 
         # Test with empty dataset spec
-        with self.assertRaises(ValueError) as cm:
-            empty_dataset_spec = DatasetSpec([], [], [])
-        self.assertEqual(str(cm.exception), 
-                         "At least one of cat_var_specs, ord_var_specs, or "
-                         "num_var_specs must be non-empty")
+        with pytest.raises(ValueError) as excinfo:
+            DatasetSpec([], [], [])
+        assert str(excinfo.value) == (
+            "At least one of cat_var_specs, ord_var_specs, or "
+            "num_var_specs must be non-empty"
+        )
 
         # Test with duplicate variable names
         cat_var1 = VarSpec('duplicate', 'categorical', [{'A', 'B'}])
         cat_var2 = VarSpec('duplicate', 'categorical', [{'C', 'D'}])
-        with self.assertRaises(ValueError) as cm:
-            duplicate_dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [])
-        self.assertEqual(
-            str(cm.exception), 
+        with pytest.raises(ValueError) as excinfo:
+            DatasetSpec([cat_var1, cat_var2], [], [])
+        assert str(excinfo.value) ==\
             "Variable names must be unique across all variable types"
-        )
 
     def test_get_ordered_variables(self):
         """Test getting ordered variables for each type."""
@@ -159,22 +148,21 @@ class TestDatasetSpec(unittest.TestCase):
                          categorical_mapping=[{'I', 'J'}, {'K', 'L'}])
         num_var = VarSpec('num_var', 'numerical')
         
-        dataset_spec =\
-            DatasetSpec([cat_var_1, cat_var_2], [ord_var], [num_var])
+        dataset_spec = DatasetSpec([cat_var_1, cat_var_2], [ord_var],
+                                   [num_var])
         
-        self.assertListEqual(dataset_spec.get_ordered_variables('categorical'), 
-                             ['cat_var_1', 'cat_var_2'])
-        self.assertListEqual(dataset_spec.get_ordered_variables('ordinal'), 
-                             ['ord_var'])
-        self.assertListEqual(dataset_spec.get_ordered_variables('numerical'), 
-                             ['num_var'])
+        assert dataset_spec.get_ordered_variables('categorical') ==\
+            ['cat_var_1', 'cat_var_2']
+        assert dataset_spec.get_ordered_variables('ordinal') == ['ord_var']
+        assert dataset_spec.get_ordered_variables('numerical') == ['num_var']
         
         # Test with invalid type
-        with self.assertRaises(ValueError) as cm:
+        with pytest.raises(ValueError) as excinfo:
             dataset_spec.get_ordered_variables('invalid_type')
-        self.assertEqual(str(cm.exception), 
-                         "Invalid 'type' field. Expected 'numerical', "
-                         "'categorical', or 'ordinal'")
+        assert str(excinfo.value) == (
+            "Invalid 'type' field. Expected 'numerical', "
+            "'categorical', or 'ordinal'"
+        )
 
     def test_get_var_spec(self):
         """Test retrieving a variable specification by name."""
@@ -190,16 +178,17 @@ class TestDatasetSpec(unittest.TestCase):
                                    [num_var])
 
         # Check that correct VarSpec is returned for valid variable names
-        self.assertEqual(dataset_spec.get_var_spec('cat_var_1'), cat_var_1)
-        self.assertEqual(dataset_spec.get_var_spec('ord_var'), ord_var)
-        self.assertEqual(dataset_spec.get_var_spec('num_var'), num_var)
+        assert dataset_spec.get_var_spec('cat_var_1') == cat_var_1
+        assert dataset_spec.get_var_spec('ord_var') == ord_var
+        assert dataset_spec.get_var_spec('num_var') == num_var
 
         # Check that ValueError is raised for invalid variable name
-        with self.assertRaises(ValueError) as cm:
+        with pytest.raises(ValueError) as excinfo:
             dataset_spec.get_var_spec('nonexistent_var')
-        self.assertEqual(str(cm.exception), 
-                         "Variable name nonexistent_var is not found in the "
-                         "provided variable specifications")
+        assert str(excinfo.value) == (
+            "Variable name nonexistent_var is not found in the "
+            "provided variable specifications"
+        )
 
     def test_from_json(self):
         """Test creating a DatasetSpec from a JSON file."""
@@ -239,27 +228,26 @@ class TestDatasetSpec(unittest.TestCase):
             json.dump(dataset_spec_dict, tmp)
             tempname = tmp.name
 
-        # Load the json file as a DatasetSpec object
-        dataset_spec = DatasetSpec.from_json(tempname)
+        try:
+            # Load the json file as a DatasetSpec object
+            dataset_spec = DatasetSpec.from_json(tempname)
 
-        # Validate the DatasetSpec object
-        self.assertEqual(len(dataset_spec.cat_var_specs), 1)
-        self.assertEqual(len(dataset_spec.ord_var_specs), 1)
-        self.assertEqual(len(dataset_spec.num_var_specs), 1)
-        
-        # Also check some attributes of the first VarSpec in each list
-        self.assertEqual(dataset_spec.cat_var_specs[0].var_name, 
-                         "categorical_var_1")
-        self.assertEqual(dataset_spec.ord_var_specs[0].var_name, 
-                         "ordinal_var_1")
-        self.assertEqual(dataset_spec.num_var_specs[0].var_name, 
-                         "numerical_var_1")
-        
-        # Clean up the temporary file
-        os.unlink(tempname)
+            # Validate the DatasetSpec object
+            assert len(dataset_spec.cat_var_specs) == 1
+            assert len(dataset_spec.ord_var_specs) == 1
+            assert len(dataset_spec.num_var_specs) == 1
+            
+            # Also check some attributes of the first VarSpec in each list
+            assert dataset_spec.cat_var_specs[0].var_name ==\
+                "categorical_var_1"
+            assert dataset_spec.ord_var_specs[0].var_name == "ordinal_var_1"
+            assert dataset_spec.num_var_specs[0].var_name == "numerical_var_1"
+        finally:
+            # Clean up the temporary file
+            os.unlink(tempname)
 
 
-class TestMixedDataset(unittest.TestCase):
+class TestMixedDataset:
     """Tests for the MixedDataset class."""
 
     def test_init_with_model_spec(self):
@@ -318,21 +306,17 @@ class TestMixedDataset(unittest.TestCase):
         )
 
         # Verify dataset properties
-        self.assertEqual(mixed_dataset.dataset_spec, dataset_spec)
-        self.assertEqual(mixed_dataset.model_spec, model_spec)
+        assert mixed_dataset.dataset_spec == dataset_spec
+        assert mixed_dataset.model_spec == model_spec
         
         # Verify data tensors
-        self.assertTrue(torch.all(
-            mixed_dataset.Xcat == torch.tensor(Xcat, device=device)
-        ))
-        self.assertTrue(torch.all(
-            mixed_dataset.Xord == torch.tensor(Xord, device=device)
-        ))
-        self.assertIsNone(mixed_dataset.Xnum)
-        self.assertTrue(torch.all(
-            mixed_dataset.y_data == torch.tensor(expected_y_data,
-                                                 device=device)
-        ))
+        assert torch.all(mixed_dataset.Xcat == torch.tensor(Xcat,
+                                                            device=device))
+        assert torch.all(mixed_dataset.Xord == torch.tensor(Xord,
+                                                            device=device))
+        assert mixed_dataset.Xnum is None
+        assert torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data,
+                                                             device=device))
 
     def test_init_categorical_target(self):
         """Test extracting a categorical target variable."""
@@ -386,16 +370,12 @@ class TestMixedDataset(unittest.TestCase):
         )
         
         # Verify target variable is correct
-        self.assertTrue(torch.all(
-            mixed_dataset.y_data == torch.tensor(expected_y_data)
-        ))
+        assert torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data))
         
         # Verify Xcat has only one column now (cat_var2) since cat_var1 was
         # extracted
-        self.assertEqual(mixed_dataset.Xcat.shape, (2, 1))
-        self.assertTrue(torch.all(
-            mixed_dataset.Xcat == torch.tensor([[2], [1]])
-        ))
+        assert mixed_dataset.Xcat.shape == (2, 1)
+        assert torch.all(mixed_dataset.Xcat == torch.tensor([[2], [1]]))
 
     def test_init_ordinal_target(self):
         """Test extracting an ordinal target variable."""
@@ -449,16 +429,12 @@ class TestMixedDataset(unittest.TestCase):
         )
         
         # Verify target variable is correct
-        self.assertTrue(torch.all(
-            mixed_dataset.y_data == torch.tensor(expected_y_data)
-        ))
+        assert torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data))
         
-        # Verify Xord has only one column now (ord_var2) since ord_var1 wa
+        # Verify Xord has only one column now (ord_var2) since ord_var1 was
         # extracted
-        self.assertEqual(mixed_dataset.Xord.shape, (2, 1))
-        self.assertTrue(torch.all(
-            mixed_dataset.Xord == torch.tensor([[3], [4]])
-        ))
+        assert mixed_dataset.Xord.shape == (2, 1)
+        assert torch.all(mixed_dataset.Xord == torch.tensor([[3], [4]]))
 
     def test_len(self):
         """Test the length calculation of the dataset."""
@@ -476,11 +452,11 @@ class TestMixedDataset(unittest.TestCase):
 
         # Test with default aug_mult=1
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat)
-        self.assertEqual(len(mixed_dataset), 2)
+        assert len(mixed_dataset) == 2
 
         # Test with aug_mult=3
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, aug_mult=3)
-        self.assertEqual(len(mixed_dataset), 6)
+        assert len(mixed_dataset) == 6
 
     def test_getitem(self):
         """Test retrieving items from the dataset."""
@@ -534,13 +510,11 @@ class TestMixedDataset(unittest.TestCase):
         x_cat, x_ord, x_num, m_num, y = mixed_dataset[0]
         
         # Verify item components
-        self.assertTrue(torch.all(x_cat == torch.tensor([1, 2],
-                                                        dtype=torch.long)))
-        self.assertTrue(torch.all(x_ord == torch.tensor([2, 2],
-                                                        dtype=torch.long)))
-        self.assertIsNone(x_num)
-        self.assertIsNone(m_num)
-        self.assertTrue(torch.all(y == expected_y_data))
+        assert torch.all(x_cat == torch.tensor([1, 2], dtype=torch.long))
+        assert torch.all(x_ord == torch.tensor([2, 2], dtype=torch.long))
+        assert x_num is None
+        assert m_num is None
+        assert torch.all(y == expected_y_data)
 
     def test_inconsistent_rows(self):
         """Test error when input arrays have inconsistent row counts."""
@@ -573,17 +547,15 @@ class TestMixedDataset(unittest.TestCase):
         Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)  # 2 rows
         Xnum = np.array([[9]], dtype=np.float32)          # 1 row
 
-        with self.assertRaises(ValueError) as cm:
-            mixed_dataset = MixedDataset(
+        with pytest.raises(ValueError) as excinfo:
+            MixedDataset(
                 dataset_spec, 
                 Xcat=Xcat, 
                 Xord=Xord, 
                 Xnum=Xnum
             )
-        self.assertEqual(
-            str(cm.exception), 
+        assert str(excinfo.value) ==\
             "Input arrays do not have the same number of samples"
-        )
 
     def test_inconsistent_columns(self):
         """Test error when input arrays have inconsistent column counts."""
@@ -613,17 +585,15 @@ class TestMixedDataset(unittest.TestCase):
         Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)
         Xnum = np.array([[9], [10]], dtype=np.float32)
 
-        with self.assertRaises(ValueError) as cm:
-            mixed_dataset = MixedDataset(
+        with pytest.raises(ValueError) as excinfo:
+            MixedDataset(
                 dataset_spec, 
                 Xcat=Xcat, 
                 Xord=Xord, 
                 Xnum=Xnum
             )
-        self.assertEqual(
-            str(cm.exception), 
+        assert str(excinfo.value) ==\
             "Xcat has 2 columns but dataset_spec has 1 categorical variables"
-        )
 
     def test_get_arrays_with_target(self):
         """Test get_arrays method when a target variable is defined."""
@@ -652,7 +622,7 @@ class TestMixedDataset(unittest.TestCase):
     
         # Verify that arrays match (with num1 removed from Xnum)
         np.testing.assert_array_almost_equal(x_cat.cpu().numpy(), Xcat)
-        self.assertIsNone(x_ord)
+        assert x_ord is None
         np.testing.assert_array_almost_equal(x_num.cpu().numpy(), Xnum[:,1:])  
         np.testing.assert_array_almost_equal(y.cpu().numpy(),
                                              dataset.y_data.cpu().numpy())
@@ -680,9 +650,9 @@ class TestMixedDataset(unittest.TestCase):
         x_cat, x_ord, x_num, y = dataset.get_arrays()
     
         np.testing.assert_array_almost_equal(x_cat.cpu().numpy(), Xcat)
-        self.assertIsNone(x_ord)
+        assert x_ord is None
         np.testing.assert_array_almost_equal(x_num.cpu().numpy(), Xnum)
-        self.assertIsNone(y)
+        assert y is None
 
     def test_aug_mult(self):
         """Test data augmentation multiplier."""
@@ -699,7 +669,7 @@ class TestMixedDataset(unittest.TestCase):
         Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
 
         mixed_dataset = MixedDataset(dataset_spec, Xcat=Xcat, aug_mult=3)
-        self.assertEqual(len(mixed_dataset), 6)
+        assert len(mixed_dataset) == 6
 
     def test_mask_prob(self):
         """Test masking probability."""
@@ -731,11 +701,12 @@ class TestMixedDataset(unittest.TestCase):
             x_cat = item[0]
     
             # If there are unmasked elements, ensure they match original values
-            if (x_cat != 0).any():
-                self.assertTrue(np.all(
-                    (x_cat[x_cat != 0].cpu().numpy() == 
-                     Xcat[0, x_cat != 0])
-                ))
+            if torch.any(x_cat != 0):
+                non_zero_indices = x_cat != 0
+                assert torch.all(
+                    x_cat[non_zero_indices].cpu() == 
+                    torch.tensor(Xcat[0])[non_zero_indices].cpu()
+                )
             
             # Record the fraction of masked values
             mask_fractions.append((x_cat == 0).float().mean().item())
@@ -743,9 +714,7 @@ class TestMixedDataset(unittest.TestCase):
         avg_mask_fraction = np.mean(mask_fractions)
     
         # Verify mask fraction is close to expected probability
-        self.assertTrue(
-            np.abs(avg_mask_fraction - mixed_dataset.mask_prob) < 0.01
-        )
+        assert abs(avg_mask_fraction - mixed_dataset.mask_prob) < 0.01
 
     def test_require_input(self):
         """Test the require_input functionality."""
@@ -797,20 +766,20 @@ class TestMixedDataset(unittest.TestCase):
             all_masked = True
     
             # Check if any categorical variables are unmasked
-            self.assertIsNotNone(sample_Xcat)
-            if np.any(sample_Xcat.cpu().numpy() != 0):
+            assert sample_Xcat is not None
+            if torch.any(sample_Xcat != 0):
                 all_masked = False
 
             # Ordinal should be None as it was the target
-            self.assertIsNone(sample_Xord)
+            assert sample_Xord is None
 
             # Check if any numerical variables are unmasked using the mask
-            self.assertIsNotNone(sample_Xnum)
-            if np.any(sample_Mnum.cpu().numpy() == True):
+            assert sample_Xnum is not None
+            if torch.any(sample_Mnum == True):
                 all_masked = False
     
             # Verify that not all variables are masked
-            self.assertFalse(all_masked)
+            assert not all_masked
     
     def test_no_y_var(self):
         """Test that dataset works without any y_var specified."""
@@ -839,12 +808,9 @@ class TestMixedDataset(unittest.TestCase):
         )
         
         # Verify no target variable was extracted
-        self.assertIsNone(mixed_dataset.y_data)
+        assert mixed_dataset.y_data is None
         
         # Verify data tensors are intact
-        self.assertTrue(torch.all(
-            mixed_dataset.Xcat == torch.tensor(Xcat)
-        ))
-        self.assertTrue(torch.all(
-            mixed_dataset.Xnum == torch.tensor(Xnum, dtype=torch.float)
-        ))
+        assert torch.all(mixed_dataset.Xcat == torch.tensor(Xcat))
+        assert torch.all(mixed_dataset.Xnum == torch.tensor(Xnum,
+                                                            dtype=torch.float))

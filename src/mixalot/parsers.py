@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
+from mixalot.crossval import CrossValidationFoldsSpec
 from mixalot.datasets import DatasetSpec, MixedDataset
 from mixalot.models import RandomForestSpec
 
@@ -357,3 +358,63 @@ def load_mixed_data(
     )
     
     return mixed_dataset, num_scalers
+
+
+def load_cross_validation_folds_spec_from_json(
+        json_path: str
+    ) -> 'CrossValidationFoldsSpec':
+    """Load a cross-validation folds specification from a JSON file.
+    
+    Args:
+        json_path (str): Path to a JSON file containing the cross-validation
+            folds specification.
+            
+    Returns:
+        CrossValidationFoldsSpec: A cross-validation folds specification object
+            created from the JSON file.
+            
+    Raises:
+        FileNotFoundError: If the provided JSON file does not exist.
+        ValueError: If the JSON file is missing required fields or contains
+            invalid values.
+    """
+    # Ensure the file exists
+    if not os.path.isfile(json_path):
+        raise FileNotFoundError(
+            f"Cross-validation specification file '{json_path}' does not "
+            "exist."
+        )
+    
+    # Load the JSON file
+    with open(json_path, 'r') as file:
+        spec_dict = json.load(file)
+    
+    # Check for required fields
+    required_fields = ['n_splits', 'random_state']
+    for field in required_fields:
+        if field not in spec_dict:
+            raise ValueError(
+                "Cross-validation specification is missing required field: "
+                f"'{field}'"
+            )
+    
+    # Get values from the dictionary
+    n_splits = spec_dict['n_splits']
+    random_state = spec_dict['random_state']
+    
+    # Validate values
+    if not isinstance(n_splits, int) or n_splits < 2:
+        raise ValueError(
+            f"n_splits must be an integer >= 2, got {n_splits}"
+        )
+    
+    if not isinstance(random_state, int):
+        raise ValueError(
+            f"random_state must be an integer, got {random_state}"
+        )
+    
+    # Create and return the specification
+    return CrossValidationFoldsSpec(
+        n_splits=n_splits,
+        random_state=random_state
+    )

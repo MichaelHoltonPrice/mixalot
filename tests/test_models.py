@@ -55,7 +55,7 @@ def valid_rf_spec():
     )
 
 
-class TestRandomForestSpec:
+class TestRandomForestSpec():
     """Test cases for the RandomForestSpec class."""
     
     def test_model_type(self, valid_rf_spec):

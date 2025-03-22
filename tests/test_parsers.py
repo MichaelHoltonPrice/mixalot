@@ -1,21 +1,23 @@
-# python -m unittest tests.test_datasets
+"""Tests for parser functions."""
 import json
 import os
 import tempfile
-import unittest
 from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from mixalot.datasets import (
     DatasetSpec,
     VarSpec,
 )
+from mixalot.crossval import CrossValidationFoldsSpec
 from mixalot.models import RandomForestSpec
 from mixalot.parsers import (
     convert_categories_to_codes,
     extract_dependent_variable,
+    load_cross_validation_folds_spec_from_json,
     load_mixed_data,
     load_model_spec,
     parse_numeric_variable,
@@ -23,7 +25,7 @@ from mixalot.parsers import (
 )
 
 
-class TestConvertCategoriesToCodes(unittest.TestCase):
+class TestConvertCategoriesToCodes:
     """Test the convert_categories_to_codes method."""
 
     def test_convert_categories_to_codes(self):
@@ -59,13 +61,13 @@ class TestConvertCategoriesToCodes(unittest.TestCase):
         data = pd.Series(['A', 'B', 'D'])
         categorical_mapping = [{'A'}, {'B'}, {'C'}]
         var_spec = VarSpec('test_var', 'categorical', categorical_mapping)
-        with self.assertRaises(ValueError) as cm:
+        with pytest.raises(ValueError) as excinfo:
             convert_categories_to_codes(data, var_spec)
-        self.assertEqual(str(cm.exception),
-                         "Variable test_var contains unobserved category D")
+        assert str(excinfo.value) ==\
+            "Variable test_var contains unobserved category D"
 
 
-class TestParseNumericVariable(unittest.TestCase):
+class TestParseNumericVariable:
     """Test the parse_numeric_variable method."""
 
     def test_parse_numeric_variable(self):
@@ -91,30 +93,31 @@ class TestParseNumericVariable(unittest.TestCase):
         """Test with invalid numeric entry."""
         data = pd.Series(['1.2', '3.4', 'invalid', '5.6'])
         var_spec = VarSpec('test_var', 'numerical')
-        with self.assertRaises(ValueError) as cm:
+        with pytest.raises(ValueError) as excinfo:
             parse_numeric_variable(data, var_spec)
-        self.assertEqual(str(cm.exception),
-                         ("Invalid entry invalid for variable test_var cannot "
-                          "be converted to float")
-                        )
+        assert str(excinfo.value) == (
+            "Invalid entry invalid for variable test_var cannot "
+            "be converted to float"
+        )
 
-class TestScaleNumericalVariables(unittest.TestCase):
+
+class TestScaleNumericalVariables:
     """Test the scale_numerical_variables method."""
     def test_scale_numerical_variables(self):
         """Test with numerical data."""
         # Single column of data
         Xnum = np.array([[1.0], [2.0], [3.0]])
         num_scalers = scale_numerical_variables(Xnum)
-        self.assertEqual(len(num_scalers), 1)
+        assert len(num_scalers) == 1
         np.testing.assert_array_almost_equal(Xnum,
-                                             np.array([[-1.22474487],
-                                                       [0.0],
-                                                       [1.22474487]]))
+                                            np.array([[-1.22474487],
+                                                      [0.0],
+                                                      [1.22474487]]))
 
         # Multiple columns of data
         Xnum = np.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0]])
         num_scalers = scale_numerical_variables(Xnum)
-        self.assertEqual(len(num_scalers), 2)
+        assert len(num_scalers) == 2
         np.testing.assert_array_almost_equal(
             Xnum,
             np.array([[-1.22474487, -1.22474487],
@@ -127,10 +130,10 @@ class TestScaleNumericalVariables(unittest.TestCase):
         # Empty array
         Xnum = np.empty((0, 0))
         num_scalers = scale_numerical_variables(Xnum)
-        self.assertEqual(len(num_scalers), 0)
+        assert len(num_scalers) == 0
 
 
-class TestExtractDependentVariable(unittest.TestCase):
+class TestExtractDependentVariable:
     """Test the extract_dependent_variable method."""
     def test_extract_dependent_variable(self):
         """Test with various inputs."""
@@ -206,6 +209,7 @@ class TestExtractDependentVariable(unittest.TestCase):
         np.testing.assert_array_equal(y, np.array([2.2, 3.3, 4.4, 5.5]))
 
     def test_no_y_variable(self):
+        """Test error cases when no y variable is specified."""
         # Test 4: Error when no y variable
         cat_var_spec1 = VarSpec("cat_var1", "categorical",
                                 [{'0', '1', '2'}])
@@ -226,7 +230,7 @@ class TestExtractDependentVariable(unittest.TestCase):
         Xord = np.array([[0], [3], [2], [1]])
         Xnum = np.array([[1.1], [2.2], [3.3], [4.4]])
         
-        with self.assertRaises(ValueError) as cm:
+        with pytest.raises(ValueError) as excinfo:
             Xcat, Xord, Xnum, y = extract_dependent_variable(
                 dataset_spec, model_spec, Xcat, Xord, Xnum
             )
@@ -235,32 +239,36 @@ class TestExtractDependentVariable(unittest.TestCase):
             "This method should not be called if model_spec does not have "
             "a valid y_var"
         )
-        self.assertEqual(str(cm.exception), expected_error)
+        assert str(excinfo.value) == expected_error
         
         # Case 2: model_spec.y_var is None
         model_spec = MagicMock()
         model_spec.y_var = None
         
-        with self.assertRaises(ValueError) as cm:
+        with pytest.raises(ValueError) as excinfo:
             Xcat, Xord, Xnum, y = extract_dependent_variable(
                 dataset_spec, model_spec, Xcat, Xord, Xnum
             )
             
-        self.assertEqual(str(cm.exception), expected_error)
+        assert str(excinfo.value) == expected_error
 
 
-class TestLoadModelSpec(unittest.TestCase):
+class TestLoadModelSpec:
     """Test cases for the load_model_spec function."""
     
-    def create_temp_model_spec_file(self, model_spec_dict):
+    @pytest.fixture
+    def create_temp_model_spec_file(self):
         """Create a temporary JSON file with the given model specification."""
-        temp_file = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
-        with open(temp_file.name, 'w') as f:
-            json.dump(model_spec_dict, f)
-        temp_file.close()
-        return temp_file.name
+        def _create_file(model_spec_dict):
+            temp_file = tempfile.NamedTemporaryFile(suffix='.json',
+                                                    delete=False)
+            with open(temp_file.name, 'w') as f:
+                json.dump(model_spec_dict, f)
+            temp_file.close()
+            return temp_file.name
+        return _create_file
     
-    def test_load_random_forest_spec(self):
+    def test_load_random_forest_spec(self, create_temp_model_spec_file):
         """Test loading a RandomForestSpec from a JSON file."""
         # Create a temporary model specification file for RandomForest
         model_spec_dict = {
@@ -275,121 +283,132 @@ class TestLoadModelSpec(unittest.TestCase):
                 }
             }
         }
-        model_spec_file = self.create_temp_model_spec_file(model_spec_dict)
+        model_spec_file = create_temp_model_spec_file(model_spec_dict)
         
-        # Load the model specification
-        model_spec = load_model_spec(model_spec_file)
-        
-        # Verify the model specification
-        self.assertIsInstance(model_spec, RandomForestSpec)
-        self.assertEqual(model_spec.model_type, 'random_forest')
-        self.assertEqual(model_spec.y_var, 'target')
-        self.assertEqual(model_spec.independent_vars, 
-                         ['feature1', 'feature2', 'feature3'])
-        self.assertEqual(model_spec.hyperparameters['n_estimators'], 100)
-        self.assertEqual(model_spec.hyperparameters['max_features']['type'],
-                         'int')
-        self.assertEqual(model_spec.hyperparameters['max_features']['value'],
-                         2)
-        
-        # Clean up
-        os.unlink(model_spec_file)
+        try:
+            # Load the model specification
+            model_spec = load_model_spec(model_spec_file)
+            
+            # Verify the model specification
+            assert isinstance(model_spec, RandomForestSpec)
+            assert model_spec.model_type == 'random_forest'
+            assert model_spec.y_var == 'target'
+            assert model_spec.independent_vars == ['feature1', 'feature2',
+                                                   'feature3']
+            assert model_spec.hyperparameters['n_estimators'] == 100
+            assert model_spec.hyperparameters['max_features']['type'] == 'int'
+            assert model_spec.hyperparameters['max_features']['value'] == 2
+        finally:
+            # Clean up
+            os.unlink(model_spec_file)
     
-    def test_missing_model_type(self):
+    def test_missing_model_type(self, create_temp_model_spec_file):
         """Test error when model_type is missing."""
         # Create a temporary model specification file with missing model_type
         model_spec_dict = {
             'y_var': 'target',
             'independent_vars': ['feature1', 'feature2']
         }
-        model_spec_file = self.create_temp_model_spec_file(model_spec_dict)
+        model_spec_file = create_temp_model_spec_file(model_spec_dict)
         
-        # Verify that an error is raised
-        with self.assertRaises(ValueError) as cm:
-            load_model_spec(model_spec_file)
-        
-        self.assertEqual(str(cm.exception), 
-                         "Model specification is missing 'model_type' field")
-        
-        # Clean up
-        os.unlink(model_spec_file)
+        try:
+            # Verify that an error is raised
+            with pytest.raises(ValueError) as excinfo:
+                load_model_spec(model_spec_file)
+            
+            assert str(excinfo.value) ==\
+                "Model specification is missing 'model_type' field"
+        finally:
+            # Clean up
+            os.unlink(model_spec_file)
     
-    def test_unsupported_model_type(self):
+    def test_unsupported_model_type(self, create_temp_model_spec_file):
         """Test error when model_type is not supported."""
-        # Create a temporary model specification file with
-        # unsupported model_type
+        # Create a temporary model specification file with unsupported
+        # model_type
         model_spec_dict = {
             'model_type': 'unsupported_model',
             'y_var': 'target',
             'independent_vars': ['feature1', 'feature2']
         }
-        model_spec_file = self.create_temp_model_spec_file(model_spec_dict)
+        model_spec_file = create_temp_model_spec_file(model_spec_dict)
         
-        # Verify that an error is raised
-        with self.assertRaises(ValueError) as cm:
-            load_model_spec(model_spec_file)
-        
-        self.assertEqual(str(cm.exception),
-                         "Unrecognized model type: unsupported_model")
-        
-        # Clean up
-        os.unlink(model_spec_file)
+        try:
+            # Verify that an error is raised
+            with pytest.raises(ValueError) as excinfo:
+                load_model_spec(model_spec_file)
+            
+            assert str(excinfo.value) ==\
+                "Unrecognized model type: unsupported_model"
+        finally:
+            # Clean up
+            os.unlink(model_spec_file)
     
     def test_file_not_found(self):
         """Test error when model specification file does not exist."""
         # Verify that an error is raised for non-existent file
-        with self.assertRaises(FileNotFoundError) as cm:
+        with pytest.raises(FileNotFoundError) as excinfo:
             load_model_spec("non_existent_file.json")
         
-        self.assertEqual(
-            str(cm.exception),
+        assert str(excinfo.value) ==\
             "Model specification file 'non_existent_file.json' does not exist."
-        )
 
 
-class TestLoadMixedData(unittest.TestCase):
+class TestLoadMixedData:
     """Test cases for the load_mixed_data function."""
     
-    def create_temp_data_file(self, data_dict, file_type='csv'):
+    @pytest.fixture
+    def create_temp_data_file(self):
         """Create a temporary data file with the given data."""
-        data_df = pd.DataFrame(data_dict)
-        temp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_type}',
-                                                delete=False)
-        if file_type == 'csv':
-            data_df.to_csv(temp_file.name, index=False)
-        elif file_type in ['xlsx', 'xls']:
-            data_df.to_excel(temp_file.name, index=False)
-        temp_file.close()  # Manually close the file
-        return temp_file.name
+        def _create_file(data_dict, file_type='csv'):
+            data_df = pd.DataFrame(data_dict)
+            temp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_type}',
+                                                    delete=False)
+            if file_type == 'csv':
+                data_df.to_csv(temp_file.name, index=False)
+            elif file_type in ['xlsx', 'xls']:
+                data_df.to_excel(temp_file.name, index=False)
+            temp_file.close()  # Manually close the file
+            return temp_file.name
+        return _create_file
 
-    def create_temp_dataset_spec_file(self, dataset_spec_dict):
+    @pytest.fixture
+    def create_temp_dataset_spec_file(self):
         """Create a temporary dataset specification file."""
-        temp_file = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
-        with open(temp_file.name, 'w') as f:
-            # Convert the sets to lists to make them serializable
-            for cat_var_spec in dataset_spec_dict.get('cat_var_specs', []):
-                cat_var_spec['categorical_mapping'] = [
-                    list(item) for item in 
-                    cat_var_spec.get('categorical_mapping', [])
-                ]
-            for ord_var_spec in dataset_spec_dict.get('ord_var_specs', []):
-                ord_var_spec['categorical_mapping'] = [
-                    list(item) for item in
-                    ord_var_spec.get('categorical_mapping', [])
-                ]
-            json.dump(dataset_spec_dict, f)
-        temp_file.close()
-        return temp_file.name
+        def _create_file(dataset_spec_dict):
+            temp_file = tempfile.NamedTemporaryFile(suffix='.json',
+                                                    delete=False)
+            with open(temp_file.name, 'w') as f:
+                # Convert the sets to lists to make them serializable
+                for cat_var_spec in dataset_spec_dict.get('cat_var_specs', []):
+                    cat_var_spec['categorical_mapping'] = [
+                        list(item) for item in 
+                        cat_var_spec.get('categorical_mapping', [])
+                    ]
+                for ord_var_spec in dataset_spec_dict.get('ord_var_specs', []):
+                    ord_var_spec['categorical_mapping'] = [
+                        list(item) for item in
+                        ord_var_spec.get('categorical_mapping', [])
+                    ]
+                json.dump(dataset_spec_dict, f)
+            temp_file.close()
+            return temp_file.name
+        return _create_file
     
-    def create_temp_model_spec_file(self, model_spec_dict):
+    @pytest.fixture
+    def create_temp_model_spec_file(self):
         """Create a temporary model specification file."""
-        temp_file = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
-        with open(temp_file.name, 'w') as f:
-            json.dump(model_spec_dict, f)
-        temp_file.close()
-        return temp_file.name
+        def _create_file(model_spec_dict):
+            temp_file = tempfile.NamedTemporaryFile(suffix='.json',
+                                                    delete=False)
+            with open(temp_file.name, 'w') as f:
+                json.dump(model_spec_dict, f)
+            temp_file.close()
+            return temp_file.name
+        return _create_file
 
-    def test_load_mixed_data_without_model_spec(self):
+    def test_load_mixed_data_without_model_spec(self, create_temp_data_file,
+                                                create_temp_dataset_spec_file):
         """Test loading mixed data without a model specification."""
         # Create temporary data file
         data_dict = {'A': ['a', 'b', 'c'], 'B': ['d', 'e', 'f'],
@@ -414,41 +433,47 @@ class TestLoadMixedData(unittest.TestCase):
                 {'var_name': 'C', 'var_type': 'numerical'}
             ]
         }
-        dataset_spec_file =\
-            self.create_temp_dataset_spec_file(dataset_spec_dict)
+        dataset_spec_file = create_temp_dataset_spec_file(dataset_spec_dict)
     
         # Define the expected output
         expected_Xcat = np.array([[1, 1], [1, 1], [2, 2]])
         expected_Xnum = np.array([[-1.2247449], [0.], [1.2247449]])
+        
+        try:
+            for file_type in ['csv', 'xlsx']:
+                # Create and load data file for each file type
+                data_file = create_temp_data_file(data_dict,
+                                                  file_type=file_type)
+                try:
+                    mixed_dataset, num_scalers = load_mixed_data(
+                        dataset_spec_file, 
+                        data_file
+                    )
+            
+                    # Assert that the actual output matches the expected output
+                    np.testing.assert_array_almost_equal(
+                        mixed_dataset.Xcat.cpu().numpy(), 
+                        expected_Xcat
+                    )
+                    assert mixed_dataset.Xord is None
+                    np.testing.assert_array_almost_equal(
+                        mixed_dataset.Xnum.cpu().numpy(), 
+                        expected_Xnum
+                    )
+                    assert mixed_dataset.y_data is None
+                    assert mixed_dataset.model_spec is None
+            
+                    # Assert that num_scalers has the correct length
+                    assert len(num_scalers) == 1
+                finally:
+                    # Clean up temporary files
+                    os.unlink(data_file)
+        finally:
+            os.unlink(dataset_spec_file)
 
-        for file_type in ['csv', 'xlsx']:
-            # Create and load data file for each file type
-            data_file = self.create_temp_data_file(data_dict, 
-                                                   file_type=file_type)
-            mixed_dataset, num_scalers = load_mixed_data(dataset_spec_file, 
-                                                         data_file)
-    
-            # Assert that the actual output matches the expected output
-            np.testing.assert_array_almost_equal(
-                mixed_dataset.Xcat.cpu().numpy(), 
-                expected_Xcat
-            )
-            self.assertIsNone(mixed_dataset.Xord)
-            np.testing.assert_array_almost_equal(
-                mixed_dataset.Xnum.cpu().numpy(), 
-                expected_Xnum
-            )
-            self.assertIsNone(mixed_dataset.y_data)
-            self.assertIsNone(mixed_dataset.model_spec)
-    
-            # Assert that num_scalers has the correct length
-            self.assertEqual(len(num_scalers), 1)
-    
-            # Clean up temporary files
-            os.unlink(data_file)
-        os.unlink(dataset_spec_file)
-
-    def test_load_mixed_data_with_model_spec(self):
+    def test_load_mixed_data_with_model_spec(self, create_temp_data_file, 
+                                             create_temp_dataset_spec_file,
+                                             create_temp_model_spec_file):
         """Test loading mixed data with a model specification."""
         # Create temporary data file
         data_dict = {'A': ['a', 'b', 'c'], 'B': ['d', 'e', 'f'],
@@ -473,8 +498,7 @@ class TestLoadMixedData(unittest.TestCase):
                 {'var_name': 'C', 'var_type': 'numerical'}
             ]
         }
-        dataset_spec_file =\
-            self.create_temp_dataset_spec_file(dataset_spec_dict)
+        dataset_spec_file = create_temp_dataset_spec_file(dataset_spec_dict)
         
         # Create temporary model specification file
         model_spec_dict = {
@@ -486,52 +510,61 @@ class TestLoadMixedData(unittest.TestCase):
                 'max_features': {'type': 'int', 'value': 1}
             }
         }
-        model_spec_file = self.create_temp_model_spec_file(model_spec_dict)
+        model_spec_file = create_temp_model_spec_file(model_spec_dict)
     
         # Define the expected output after A is extracted as y_var
         expected_Xcat = np.array([[1], [1], [2]])  # Just B column
         expected_Xnum = np.array([[-1.2247449], [0.], [1.2247449]])
         expected_y_data = np.array([1, 1, 2])  # A column values
-
-        # Create and load data file
-        data_file = self.create_temp_data_file(data_dict, file_type='csv')
-        mixed_dataset, num_scalers = load_mixed_data(
-            dataset_spec_file, 
-            data_file, 
-            model_spec_file
-        )
-
-        # Assert that the actual output matches the expected output
-        np.testing.assert_array_almost_equal(mixed_dataset.Xcat.cpu().numpy(), 
-                                             expected_Xcat)
-        self.assertIsNone(mixed_dataset.Xord)
-        np.testing.assert_array_almost_equal(mixed_dataset.Xnum.cpu().numpy(), 
-                                             expected_Xnum)
         
-        # Assert that y_data contains the A column
-        np.testing.assert_array_almost_equal(
-            mixed_dataset.y_data.cpu().numpy(), 
-            expected_y_data
-        )
+        try:
+            # Create and load data file
+            data_file = create_temp_data_file(data_dict, file_type='csv')
+            try:
+                mixed_dataset, num_scalers = load_mixed_data(
+                    dataset_spec_file, 
+                    data_file, 
+                    model_spec_file
+                )
         
-        # Assert that the model_spec is correctly loaded
-        self.assertIsNotNone(mixed_dataset.model_spec)
-        self.assertEqual(mixed_dataset.model_spec.model_type, 'random_forest')
-        self.assertEqual(mixed_dataset.model_spec.y_var, 'A')
-        self.assertEqual(mixed_dataset.model_spec.independent_vars, ['B', 'C'])
+                # Assert that the actual output matches the expected output
+                np.testing.assert_array_almost_equal(
+                    mixed_dataset.Xcat.cpu().numpy(), 
+                    expected_Xcat
+                )
+                assert mixed_dataset.Xord is None
+                np.testing.assert_array_almost_equal(
+                    mixed_dataset.Xnum.cpu().numpy(), 
+                    expected_Xnum
+                )
+                
+                # Assert that y_data contains the A column
+                np.testing.assert_array_almost_equal(
+                    mixed_dataset.y_data.cpu().numpy(), 
+                    expected_y_data
+                )
+                
+                # Assert that the model_spec is correctly loaded
+                assert mixed_dataset.model_spec is not None
+                assert mixed_dataset.model_spec.model_type == 'random_forest'
+                assert mixed_dataset.model_spec.y_var == 'A'
+                assert mixed_dataset.model_spec.independent_vars == ['B', 'C']
+            finally:
+                # Clean up temporary file
+                os.unlink(data_file)
+        finally:
+            # Clean up temporary files
+            os.unlink(dataset_spec_file)
+            os.unlink(model_spec_file)
 
-        # Clean up temporary files
-        os.unlink(data_file)
-        os.unlink(dataset_spec_file)
-        os.unlink(model_spec_file)
-
-    def test_load_mixed_data_unsupported_file_type(self):
+    def test_load_mixed_data_unsupported_file_type(self, create_temp_data_file, 
+                                               create_temp_dataset_spec_file):
         """Test error when file type is unsupported."""
         # Create a file with unsupported type and test if ValueError is raised.
         data_dict = {'A': ['a', 'b', 'c'], 'B': ['d', 'e', 'f'],
                      'C': [1, 2, 3]}
-        data_file = self.create_temp_data_file(data_dict, 
-                                              file_type='txt')  # Unsupported
+        data_file = create_temp_data_file(data_dict, 
+                                        file_type='txt')  # Unsupported
     
         dataset_spec_dict = {
             'cat_var_specs': [
@@ -551,19 +584,22 @@ class TestLoadMixedData(unittest.TestCase):
                 {'var_name': 'C', 'var_type': 'numerical'}
             ]
         }
-        dataset_spec_file =\
-            self.create_temp_dataset_spec_file(dataset_spec_dict)
-    
-        with self.assertRaises(ValueError) as cm:
-            _ , _ = load_mixed_data(dataset_spec_file, 
-                                    data_file)
-        expected_error = "Unsupported file type"
-        self.assertEqual(str(cm.exception), expected_error)
+        dataset_spec_file = create_temp_dataset_spec_file(dataset_spec_dict)
+        
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                _ , _ = load_mixed_data(dataset_spec_file, 
+                                      data_file)
+            assert str(excinfo.value) == "Unsupported file type"
+        finally:
+            os.unlink(data_file)
+            os.unlink(dataset_spec_file)
 
-        os.unlink(data_file)
-        os.unlink(dataset_spec_file)
-
-    def test_load_mixed_data_invalid_specification(self):
+    def test_load_mixed_data_invalid_specification(
+            self,
+            create_temp_data_file, 
+            create_temp_dataset_spec_file
+        ):
         """Test error when data does not match the dataset specification."""
         # Create a data file where 'A' column contains values not in mapping
         data_dict = {
@@ -571,7 +607,7 @@ class TestLoadMixedData(unittest.TestCase):
             'B': ['d', 'e', 'f'], 
             'C': [1, 2, 3]
         }
-        data_file = self.create_temp_data_file(data_dict, file_type='csv')
+        data_file = create_temp_data_file(data_dict, file_type='csv')
     
         dataset_spec_dict = {
             'cat_var_specs': [
@@ -591,19 +627,20 @@ class TestLoadMixedData(unittest.TestCase):
                 {'var_name': 'C', 'var_type': 'numerical'}
             ]
         }
-        dataset_spec_file =\
-            self.create_temp_dataset_spec_file(dataset_spec_dict)
+        dataset_spec_file = create_temp_dataset_spec_file(dataset_spec_dict)
+        
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                _ , _ = load_mixed_data(dataset_spec_file, 
+                                      data_file)
+            assert str(excinfo.value) ==\
+                "Variable A contains unobserved category x"
+        finally:
+            os.unlink(data_file)
+            os.unlink(dataset_spec_file)
     
-        with self.assertRaises(ValueError) as cm:
-            _ , _ = load_mixed_data(dataset_spec_file, 
-                                    data_file)
-        expected_error = "Variable A contains unobserved category x"
-        self.assertEqual(str(cm.exception), expected_error)
-    
-        os.unlink(data_file)
-        os.unlink(dataset_spec_file)
-    
-    def test_load_mixed_data_file_not_found(self):
+    def test_load_mixed_data_file_not_found(self,
+                                            create_temp_dataset_spec_file):
         """Test error when data file does not exist."""
         dataset_spec_dict = {
             'cat_var_specs': [
@@ -623,25 +660,29 @@ class TestLoadMixedData(unittest.TestCase):
                 {'var_name': 'C', 'var_type': 'numerical'}
             ]
         }
-        dataset_spec_file =\
-            self.create_temp_dataset_spec_file(dataset_spec_dict)
-    
-        with self.assertRaises(FileNotFoundError) as cm:
-            _ , _ = load_mixed_data(
-                dataset_spec_file, 
-                "non_existent_file.csv"
-            )
-        expected_error = "Data file 'non_existent_file.csv' does not exist."
-        self.assertEqual(str(cm.exception), expected_error)
-    
-        os.unlink(dataset_spec_file)
-    
-    def test_model_spec_file_not_found(self):
+        dataset_spec_file = create_temp_dataset_spec_file(dataset_spec_dict)
+        
+        try:
+            with pytest.raises(FileNotFoundError) as excinfo:
+                _ , _ = load_mixed_data(
+                    dataset_spec_file, 
+                    "non_existent_file.csv"
+                )
+            assert str(excinfo.value) ==\
+                "Data file 'non_existent_file.csv' does not exist."
+        finally:
+            os.unlink(dataset_spec_file)
+
+    def test_model_spec_file_not_found(
+        self, 
+        create_temp_data_file, 
+        create_temp_dataset_spec_file
+    ):
         """Test error when model specification file does not exist."""
         # Create temporary data and dataset spec files
         data_dict = {'A': ['a', 'b', 'c'], 'B': ['d', 'e', 'f'],
                      'C': [1, 2, 3]}
-        data_file = self.create_temp_data_file(data_dict, file_type='csv')
+        data_file = create_temp_data_file(data_dict, file_type='csv')
         
         dataset_spec_dict = {
             'cat_var_specs': [
@@ -661,27 +702,127 @@ class TestLoadMixedData(unittest.TestCase):
                 {'var_name': 'C', 'var_type': 'numerical'}
             ]
         }
-        dataset_spec_file =\
-            self.create_temp_dataset_spec_file(dataset_spec_dict)
+        dataset_spec_file = create_temp_dataset_spec_file(dataset_spec_dict)
         
-        # Test with non-existent model spec file
-        with self.assertRaises(FileNotFoundError) as cm:
-            _ , _ = load_mixed_data(
-                dataset_spec_file,
-                data_file,
-                "non_existent_model_spec.json"
+        try:
+            # Test with non-existent model spec file
+            with pytest.raises(FileNotFoundError) as excinfo:
+                _ , _ = load_mixed_data(
+                    dataset_spec_file,
+                    data_file,
+                    "non_existent_model_spec.json"
+                )
+            
+            expected_error = (
+                "Model specification file 'non_existent_model_spec.json' "
+                "does not exist."
             )
-        
-        expected_error = (
-            "Model specification file 'non_existent_model_spec.json' does "
-            "not exist."
-        )
-        self.assertEqual(str(cm.exception), expected_error)
-        
-        # Clean up
-        os.unlink(data_file)
-        os.unlink(dataset_spec_file)
+            assert str(excinfo.value) == expected_error
+        finally:
+            # Clean up
+            os.unlink(data_file)
+            os.unlink(dataset_spec_file)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestLoadCrossValidationFoldsSpec:
+    """Tests for load_cross_validation_folds_spec_from_json function."""
+    
+    def test_load_valid_cross_validation_spec(self, tmp_path):
+        """Test loading a valid cross-validation specification."""
+        # Create a temporary JSON file with valid data
+        spec_path = tmp_path / "cv_spec.json"
+        with open(spec_path, 'w') as f:
+            json.dump({
+                "n_splits": 5,
+                "random_state": 42
+            }, f)
+        
+        # Load the spec
+        cv_spec = load_cross_validation_folds_spec_from_json(str(spec_path))
+        
+        # Verify it has the correct values
+        assert cv_spec.n_splits == 5
+        assert cv_spec.random_state == 42
+        
+        # Verify it's the correct type
+        assert isinstance(cv_spec, CrossValidationFoldsSpec)
+
+    def test_load_missing_file(self):
+        """Test that an error is raised for a non-existent file."""
+        with pytest.raises(FileNotFoundError) as excinfo:
+            load_cross_validation_folds_spec_from_json("nonexistent_file.json")
+        
+        assert "does not exist" in str(excinfo.value)
+
+    def test_load_missing_n_splits(self, tmp_path):
+        """Test that an error is raised when n_splits is missing."""
+        # Create a temporary JSON file with missing n_splits
+        spec_path = tmp_path / "missing_splits.json"
+        with open(spec_path, 'w') as f:
+            json.dump({
+                "random_state": 42
+            }, f)
+        
+        with pytest.raises(ValueError) as excinfo:
+            load_cross_validation_folds_spec_from_json(str(spec_path))
+        
+        assert "missing required field: 'n_splits'" in str(excinfo.value)
+
+    def test_load_missing_random_state(self, tmp_path):
+        """Test that an error is raised when random_state is missing."""
+        # Create a temporary JSON file with missing random_state
+        spec_path = tmp_path / "missing_random_state.json"
+        with open(spec_path, 'w') as f:
+            json.dump({
+                "n_splits": 5
+            }, f)
+        
+        with pytest.raises(ValueError) as excinfo:
+            load_cross_validation_folds_spec_from_json(str(spec_path))
+        
+        assert "missing required field: 'random_state'" in str(excinfo.value)
+
+    def test_load_invalid_n_splits(self, tmp_path):
+        """Test that an error is raised when n_splits is invalid."""
+        # Create a temporary JSON file with invalid n_splits
+        spec_path = tmp_path / "invalid_splits.json"
+        with open(spec_path, 'w') as f:
+            json.dump({
+                "n_splits": 1,  # Must be >= 2
+                "random_state": 42
+            }, f)
+        
+        with pytest.raises(ValueError) as excinfo:
+            load_cross_validation_folds_spec_from_json(str(spec_path))
+        
+        assert "n_splits must be an integer >= 2" in str(excinfo.value)
+
+    def test_load_non_integer_n_splits(self, tmp_path):
+        """Test that an error is raised when n_splits is not an integer."""
+        # Create a temporary JSON file with non-integer n_splits
+        spec_path = tmp_path / "non_integer_splits.json"
+        with open(spec_path, 'w') as f:
+            json.dump({
+                "n_splits": "five",  # Must be an integer
+                "random_state": 42
+            }, f)
+        
+        with pytest.raises(ValueError) as excinfo:
+            load_cross_validation_folds_spec_from_json(str(spec_path))
+        
+        assert "n_splits must be an integer >= 2" in str(excinfo.value)
+
+    def test_load_non_integer_random_state(self, tmp_path):
+        """Test that an error is raised when random_state is not an integer."""
+        # Create a temporary JSON file with non-integer random_state
+        spec_path = tmp_path / "non_integer_random_state.json"
+        with open(spec_path, 'w') as f:
+            json.dump({
+                "n_splits": 5,
+                "random_state": "forty-two"  # Must be an integer
+            }, f)
+        
+        with pytest.raises(ValueError) as excinfo:
+            load_cross_validation_folds_spec_from_json(str(spec_path))
+        
+        assert "random_state must be an integer" in str(excinfo.value)

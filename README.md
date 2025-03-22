@@ -38,8 +38,14 @@ searching the internet for an up-to-date approach applicable to your situation:
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-Discover and run the tests:
+Run all of the unit tests:
 
 ```bash
-python -m unittest discover tests
+python -m pytest
+```
+
+Run just the tests in one file:
+
+```bash
+python -m pytest tests/test_models.py
 ```

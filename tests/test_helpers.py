@@ -1,10 +1,11 @@
-"""Tests for parser functions."""
+"""Tests for helper methods."""
 import json
 import os
 import tempfile
 from unittest.mock import MagicMock
 
 import numpy as np
+import torch
 import pandas as pd
 import pytest
 
@@ -12,12 +13,11 @@ from mixalot.datasets import (
     DatasetSpec,
     VarSpec,
 )
-from mixalot.crossval import CrossValidationFoldsSpec
 from mixalot.models import RandomForestSpec
-from mixalot.parsers import (
+from mixalot.helpers import (
+    combine_features,
     convert_categories_to_codes,
     extract_dependent_variable,
-    load_cross_validation_folds_spec_from_json,
     load_mixed_data,
     load_model_spec,
     parse_numeric_variable,
@@ -70,24 +70,89 @@ class TestConvertCategoriesToCodes:
 class TestParseNumericVariable:
     """Test the parse_numeric_variable method."""
 
-    def test_parse_numeric_variable(self):
-        """Test with numerical data."""
+    def test_parse_numeric_variable_with_strings(self):
+        """Test with string representation of numerical data."""
         # Test with missing values represented by np.nan
         data = pd.Series(['1.2', '3.4', np.nan, '5.6', '', '7.8'])
         var_spec = VarSpec('test_var', 'numerical')
         expected_output = np.array([1.2, 3.4, np.nan, 5.6, np.nan, 7.8])
-        np.testing.assert_array_equal(parse_numeric_variable(data, var_spec),
-                                      expected_output)
+        
+        result = parse_numeric_variable(data, var_spec)
+        # Need to use assert_array_almost_equal because of floating point
+        # comparison
+        np.testing.assert_array_almost_equal(result, expected_output)
 
-        # Test with additional missing values
+        # Test with additional missing values specified in var_spec
         data = pd.Series(['1.2', '3.4', 'NA', '5.6', '', '7.8', 'missing'])
         missing_values = {'NA', 'missing'}
         var_spec = VarSpec('test_var', 'numerical',
                            missing_values=missing_values)
         expected_output = np.array([1.2, 3.4, np.nan, 5.6, np.nan, 7.8,
                                     np.nan])
-        np.testing.assert_array_equal(parse_numeric_variable(data, var_spec),
-                                      expected_output)
+        
+        result = parse_numeric_variable(data, var_spec)
+        np.testing.assert_array_almost_equal(result, expected_output)
+
+    def test_parse_numeric_variable_with_floats(self):
+        """Test with actual float values (not strings)."""
+        # Test with missing values represented by np.nan
+        data = pd.Series([1.2, 3.4, np.nan, 5.6, 7.8])
+        var_spec = VarSpec('test_var', 'numerical')
+        expected_output = np.array([1.2, 3.4, np.nan, 5.6, 7.8])
+        
+        result = parse_numeric_variable(data, var_spec)
+        np.testing.assert_array_almost_equal(result, expected_output)
+
+    def test_parse_numeric_variable_mixed_types(self):
+        """Test with mixed string and float values."""
+        # Some values are strings, some are floats
+        data = pd.Series(['1.2', 3.4, np.nan, '5.6', '', 7.8])
+        var_spec = VarSpec('test_var', 'numerical')
+        expected_output = np.array([1.2, 3.4, np.nan, 5.6, np.nan, 7.8])
+        
+        result = parse_numeric_variable(data, var_spec)
+        np.testing.assert_array_almost_equal(result, expected_output)
+
+    def test_parse_numeric_variable_with_integers(self):
+        """Test with integer values."""
+        data = pd.Series([1, 2, np.nan, 3, 4])
+        var_spec = VarSpec('test_var', 'numerical')
+        expected_output = np.array([1.0, 2.0, np.nan, 3.0, 4.0])
+        
+        result = parse_numeric_variable(data, var_spec)
+        np.testing.assert_array_almost_equal(result, expected_output)
+
+    def test_parse_numeric_variable_with_whitespace(self):
+        """Test handling of whitespace in string values."""
+        data = pd.Series([' 1.2 ', '  3.4', '5.6  ', '  7.8  '])
+        var_spec = VarSpec('test_var', 'numerical')
+        expected_output = np.array([1.2, 3.4, 5.6, 7.8])
+        
+        result = parse_numeric_variable(data, var_spec)
+        np.testing.assert_array_almost_equal(result, expected_output)
+
+    def test_parse_numeric_variable_with_missing_values(self):
+        """Test different types of missing values."""
+        data = pd.Series(['1.2', None, np.nan, pd.NA, '', 'NA', 'missing',
+                          '3.4'])
+        missing_values = {'NA', 'missing'}
+        var_spec = VarSpec('test_var', 'numerical',
+                         missing_values=missing_values)
+        expected_output = np.array([1.2, np.nan, np.nan, np.nan, np.nan,
+                                    np.nan, np.nan, 3.4])
+        
+        result = parse_numeric_variable(data, var_spec)
+        # Use isnan to check for NaN values
+        assert np.array_equal(
+            np.isnan(result), 
+            np.isnan(expected_output)
+        )
+        # Check non-NaN values directly
+        mask = ~np.isnan(expected_output)
+        np.testing.assert_array_almost_equal(
+            result[mask], 
+            expected_output[mask]
+        )
 
     def test_invalid_numeric_entry(self):
         """Test with invalid numeric entry."""
@@ -95,10 +160,29 @@ class TestParseNumericVariable:
         var_spec = VarSpec('test_var', 'numerical')
         with pytest.raises(ValueError) as excinfo:
             parse_numeric_variable(data, var_spec)
-        assert str(excinfo.value) == (
-            "Invalid entry invalid for variable test_var cannot "
-            "be converted to float"
-        )
+        assert "Invalid entry invalid for variable test_var"\
+            in str(excinfo.value)
+
+    def test_parse_numeric_variable_empty_series(self):
+        """Test with an empty series."""
+        data = pd.Series([], dtype=float)
+        var_spec = VarSpec('test_var', 'numerical')
+        expected_output = np.array([], dtype=float)
+        
+        result = parse_numeric_variable(data, var_spec)
+        np.testing.assert_array_equal(result, expected_output)
+
+    def test_parse_numeric_variable_all_missing(self):
+        """Test with a series containing only missing values."""
+        data = pd.Series([np.nan, None, '', 'NA', 'missing'])
+        missing_values = {'NA', 'missing'}
+        var_spec = VarSpec('test_var', 'numerical',
+                         missing_values=missing_values)
+        expected_output = np.array([np.nan, np.nan, np.nan, np.nan, np.nan])
+        
+        result = parse_numeric_variable(data, var_spec)
+        # All values should be NaN
+        assert np.all(np.isnan(result))
 
 
 class TestScaleNumericalVariables:
@@ -724,105 +808,65 @@ class TestLoadMixedData:
             os.unlink(dataset_spec_file)
 
 
-class TestLoadCrossValidationFoldsSpec:
-    """Tests for load_cross_validation_folds_spec_from_json function."""
-    
-    def test_load_valid_cross_validation_spec(self, tmp_path):
-        """Test loading a valid cross-validation specification."""
-        # Create a temporary JSON file with valid data
-        spec_path = tmp_path / "cv_spec.json"
-        with open(spec_path, 'w') as f:
-            json.dump({
-                "n_splits": 5,
-                "random_state": 42
-            }, f)
-        
-        # Load the spec
-        cv_spec = load_cross_validation_folds_spec_from_json(str(spec_path))
-        
-        # Verify it has the correct values
-        assert cv_spec.n_splits == 5
-        assert cv_spec.random_state == 42
-        
-        # Verify it's the correct type
-        assert isinstance(cv_spec, CrossValidationFoldsSpec)
+class TestCombineFeatures:
+    """Tests for the combine_features function in helpers.py."""
 
-    def test_load_missing_file(self):
-        """Test that an error is raised for a non-existent file."""
-        with pytest.raises(FileNotFoundError) as excinfo:
-            load_cross_validation_folds_spec_from_json("nonexistent_file.json")
-        
-        assert "does not exist" in str(excinfo.value)
+    def test_combine_all_feature_types(self):
+        """Test combining categorical, ordinal, and numerical features."""
+        # Create sample data for each feature type
+        Xcat = torch.tensor([[1, 2], [3, 4]], dtype=torch.long)
+        Xord = torch.tensor([[5, 6], [7, 8]], dtype=torch.long)
+        Xnum = torch.tensor([[9.1, 10.2], [11.3, 12.4]], dtype=torch.float)
 
-    def test_load_missing_n_splits(self, tmp_path):
-        """Test that an error is raised when n_splits is missing."""
-        # Create a temporary JSON file with missing n_splits
-        spec_path = tmp_path / "missing_splits.json"
-        with open(spec_path, 'w') as f:
-            json.dump({
-                "random_state": 42
-            }, f)
-        
-        with pytest.raises(ValueError) as excinfo:
-            load_cross_validation_folds_spec_from_json(str(spec_path))
-        
-        assert "missing required field: 'n_splits'" in str(excinfo.value)
+        # Combine features
+        combined = combine_features(Xcat, Xord, Xnum)
 
-    def test_load_missing_random_state(self, tmp_path):
-        """Test that an error is raised when random_state is missing."""
-        # Create a temporary JSON file with missing random_state
-        spec_path = tmp_path / "missing_random_state.json"
-        with open(spec_path, 'w') as f:
-            json.dump({
-                "n_splits": 5
-            }, f)
-        
-        with pytest.raises(ValueError) as excinfo:
-            load_cross_validation_folds_spec_from_json(str(spec_path))
-        
-        assert "missing required field: 'random_state'" in str(excinfo.value)
+        # Expected result: all features combined in order (cat, ord, num)
+        # Create expected array with float32 dtype to match PyTorch's output
+        expected = np.array([
+            [1.0, 2.0, 5.0, 6.0, 9.1, 10.2],
+            [3.0, 4.0, 7.0, 8.0, 11.3, 12.4]
+        ], dtype=np.float32)
 
-    def test_load_invalid_n_splits(self, tmp_path):
-        """Test that an error is raised when n_splits is invalid."""
-        # Create a temporary JSON file with invalid n_splits
-        spec_path = tmp_path / "invalid_splits.json"
-        with open(spec_path, 'w') as f:
-            json.dump({
-                "n_splits": 1,  # Must be >= 2
-                "random_state": 42
-            }, f)
-        
-        with pytest.raises(ValueError) as excinfo:
-            load_cross_validation_folds_spec_from_json(str(spec_path))
-        
-        assert "n_splits must be an integer >= 2" in str(excinfo.value)
+        # Check the shape and values
+        assert combined.shape == (2, 6)
+        # Use a lower precision for comparison due to float32/float64
+        # differences
+        np.testing.assert_array_almost_equal(combined, expected, decimal=5)
 
-    def test_load_non_integer_n_splits(self, tmp_path):
-        """Test that an error is raised when n_splits is not an integer."""
-        # Create a temporary JSON file with non-integer n_splits
-        spec_path = tmp_path / "non_integer_splits.json"
-        with open(spec_path, 'w') as f:
-            json.dump({
-                "n_splits": "five",  # Must be an integer
-                "random_state": 42
-            }, f)
-        
-        with pytest.raises(ValueError) as excinfo:
-            load_cross_validation_folds_spec_from_json(str(spec_path))
-        
-        assert "n_splits must be an integer >= 2" in str(excinfo.value)
+    def test_combine_with_missing_feature_types(self):
+        """Test combining features when some feature types are None."""
+        # Test with only categorical features
+        Xcat = torch.tensor([[1, 2], [3, 4]], dtype=torch.long)
+        combined = combine_features(Xcat, None, None)
+        expected = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        # Use a lower precision for comparison due to float32/float64
+        # differences
+        np.testing.assert_array_almost_equal(combined, expected, decimal=5)
 
-    def test_load_non_integer_random_state(self, tmp_path):
-        """Test that an error is raised when random_state is not an integer."""
-        # Create a temporary JSON file with non-integer random_state
-        spec_path = tmp_path / "non_integer_random_state.json"
-        with open(spec_path, 'w') as f:
-            json.dump({
-                "n_splits": 5,
-                "random_state": "forty-two"  # Must be an integer
-            }, f)
-        
-        with pytest.raises(ValueError) as excinfo:
-            load_cross_validation_folds_spec_from_json(str(spec_path))
-        
-        assert "random_state must be an integer" in str(excinfo.value)
+        # Test with only ordinal features
+        Xord = torch.tensor([[5, 6], [7, 8]], dtype=torch.long)
+        combined = combine_features(None, Xord, None)
+        expected = np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)
+        # Use a lower precision for comparison due to float32/float64
+        # differences
+        np.testing.assert_array_almost_equal(combined, expected, decimal=5)
+
+        # Test with only numerical features
+        Xnum = torch.tensor([[9.1, 10.2], [11.3, 12.4]], dtype=torch.float)
+        combined = combine_features(None, None, Xnum)
+        expected = np.array([[9.1, 10.2], [11.3, 12.4]], dtype=np.float32)
+        np.testing.assert_almost_equal(combined, expected)
+
+        # Test with categorical and numerical features (skip ordinal)
+        combined = combine_features(Xcat, None, Xnum)
+        expected = np.array([
+            [1.0, 2.0, 9.1, 10.2],
+            [3.0, 4.0, 11.3, 12.4]
+        ], dtype=np.float32)
+        np.testing.assert_almost_equal(combined, expected)
+
+    def test_empty_features(self):
+        """Test that an exception is raised when all features are None."""
+        with pytest.raises(ValueError, match="No features provided"):
+            combine_features(None, None, None)

@@ -1,4 +1,4 @@
-"""Methods for parsing and loading data."""
+"""Helper methods."""
 from __future__ import annotations
 import json
 import os
@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from mixalot.crossval import CrossValidationFoldsSpec
 from mixalot.datasets import DatasetSpec, MixedDataset
 from mixalot.models import RandomForestSpec
 
@@ -71,6 +70,7 @@ def convert_categories_to_codes(data, var_spec):
                     codes.append(code)
     return np.array(codes)
 
+
 def parse_numeric_variable(data, var_spec):
     """
     Function to handle missing values in numerical data.
@@ -93,24 +93,31 @@ def parse_numeric_variable(data, var_spec):
         if pd.isnull(entry):
             handled_data.append(np.nan)
         else:
-            # The entry is not null, so strip it of whitespace
-            entry = entry.strip()
-            if entry == '':
-                # We interpret blank entries as missing
-                handled_data.append(np.nan)
-            elif (var_spec.missing_values is not None
-                  and entry in var_spec.missing_values):
-                # This is an NA explicitly specified in var_spec.missing_values
-                handled_data.append(np.nan)
+            # Check if the entry is a string that needs to be converted
+            if isinstance(entry, str):
+                # The entry is a string, so strip it of whitespace
+                entry = entry.strip()
+                if entry == '':
+                    # We interpret blank entries as missing
+                    handled_data.append(np.nan)
+                elif (var_spec.missing_values is not None
+                      and entry in var_spec.missing_values):
+                    # This is an NA explicitly specified in
+                    # var_spec.missing_values
+                    handled_data.append(np.nan)
+                else:
+                    try:
+                        # This is a valid number! Convert it to float.
+                        handled_data.append(float(entry))
+                    except ValueError:
+                        raise ValueError(
+                            f"Invalid entry {entry} for variable "
+                            f"{var_spec.var_name} cannot be converted to float"
+                        )
             else:
-                try:
-                    # This is a valid number! Convert it to float.
-                    handled_data.append(float(entry))
-                except ValueError:
-                    raise ValueError(
-                        f"Invalid entry {entry} for variable "
-                        f"{var_spec.var_name} cannot be converted to float"
-                    )
+                # The entry is already a numeric type, just append it
+                handled_data.append(float(entry))
+    
     return np.array(handled_data, dtype=float)
 
 
@@ -360,61 +367,33 @@ def load_mixed_data(
     return mixed_dataset, num_scalers
 
 
-def load_cross_validation_folds_spec_from_json(
-        json_path: str
-    ) -> 'CrossValidationFoldsSpec':
-    """Load a cross-validation folds specification from a JSON file.
+def combine_features(Xcat, Xord, Xnum) -> np.ndarray:
+    """Combine categorical, ordinal, and numerical features into one array.
     
     Args:
-        json_path (str): Path to a JSON file containing the cross-validation
-            folds specification.
-            
+        Xcat: Categorical features tensor or None.
+        Xord: Ordinal features tensor or None.
+        Xnum: Numerical features tensor or None.
+        
     Returns:
-        CrossValidationFoldsSpec: A cross-validation folds specification object
-            created from the JSON file.
-            
-    Raises:
-        FileNotFoundError: If the provided JSON file does not exist.
-        ValueError: If the JSON file is missing required fields or contains
-            invalid values.
+        Combined features as a numpy array.
     """
-    # Ensure the file exists
-    if not os.path.isfile(json_path):
-        raise FileNotFoundError(
-            f"Cross-validation specification file '{json_path}' does not "
-            "exist."
-        )
+    # Convert tensors to numpy if they are not None
+    features = []
     
-    # Load the JSON file
-    with open(json_path, 'r') as file:
-        spec_dict = json.load(file)
+    if Xcat is not None:
+        features.append(Xcat.float().cpu().numpy())
     
-    # Check for required fields
-    required_fields = ['n_splits', 'random_state']
-    for field in required_fields:
-        if field not in spec_dict:
-            raise ValueError(
-                "Cross-validation specification is missing required field: "
-                f"'{field}'"
-            )
+    if Xord is not None:
+        features.append(Xord.float().cpu().numpy())
     
-    # Get values from the dictionary
-    n_splits = spec_dict['n_splits']
-    random_state = spec_dict['random_state']
+    if Xnum is not None:
+        features.append(Xnum.float().cpu().numpy())
     
-    # Validate values
-    if not isinstance(n_splits, int) or n_splits < 2:
-        raise ValueError(
-            f"n_splits must be an integer >= 2, got {n_splits}"
-        )
-    
-    if not isinstance(random_state, int):
-        raise ValueError(
-            f"random_state must be an integer, got {random_state}"
-        )
-    
-    # Create and return the specification
-    return CrossValidationFoldsSpec(
-        n_splits=n_splits,
-        random_state=random_state
-    )
+    # Combine all features into a single array
+    if len(features) > 1:
+        return np.concatenate(features, axis=1)
+    elif len(features) == 1:
+        return features[0]
+    else:
+        raise ValueError("No features provided to combine_features")

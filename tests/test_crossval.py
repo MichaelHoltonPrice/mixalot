@@ -13,6 +13,7 @@ from mixalot.crossval import (
     dataframe_to_mixed_dataset,
     fit_single_fold,
     load_cross_validation_folds_spec_from_json,
+    run_cross_validation,
 )
 from mixalot.datasets import DatasetSpec, MixedDataset, VarSpec
 from mixalot.models import RandomForestSpec
@@ -356,9 +357,10 @@ def simple_cv_spec():
 def simple_dataframe():
     """Fixture creating a simple dataframe for testing."""
     return pd.DataFrame({
-        'var1': ['a', 'b', 'a', 'c'],
-        'var2': ['low', 'medium', 'high', 'medium'],
-        'var3': [0.5, 1.2, 0.8, 1.5]
+        'var1': ['a', 'b', 'a', 'c', 'b', 'c', 'a', 'b'],
+        'var2': ['low', 'medium', 'high', 'medium', 'low', 'high', 'medium',
+                 'high'],
+        'var3': [0.5, 1.2, 0.8, 1.5, 1.1, 0.9, 1.3, 0.7]
     })
 
 
@@ -605,3 +607,354 @@ class TestDataframeToMixedDataset:
         with pytest.raises(ValueError, match="Variable 'var2' .* not found"):
             dataframe_to_mixed_dataset(df, simple_dataset_spec,
                                        simple_model_spec)
+
+
+class TestRunCrossValidation:
+    """Tests for run_cross_validation function."""
+    def test_run_cross_validation_basic(
+        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        simple_dataframe, tmp_path
+    ):
+        """Test basic functionality of run_cross_validation."""
+        
+        # Patch the fold indices to ensure a valid split
+        with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
+            # Create a split where all categories appear in both train and test
+            # First 4 rows in training, last 4 in testing
+            mock_indices.return_value = (
+                np.array([0, 1, 2, 3]), 
+                np.array([4, 5, 6, 7])
+            )
+            
+            # Run cross-validation
+            results = run_cross_validation(
+                simple_dataframe,
+                simple_dataset_spec,
+                simple_cv_spec,
+                simple_model_spec,
+                random_seed=42,
+                output_folder=str(tmp_path)
+            )
+        
+        # Check the structure of the results
+        assert 'fold_results' in results
+        assert 'average_loss' in results
+        assert 'std_loss' in results
+        assert 'all_predictions' in results
+        assert 'loss_type' in results
+        assert 'n_folds_completed' in results
+        assert 'n_folds_total' in results
+        
+        # Check that the right number of folds were completed
+        assert results['n_folds_completed'] == simple_cv_spec.n_splits
+        assert results['n_folds_total'] == simple_cv_spec.n_splits
+        
+        # Check that fold results are as expected
+        assert len(results['fold_results']) == simple_cv_spec.n_splits
+        for fold_result in results['fold_results']:
+            assert 'model' in fold_result
+            assert 'fold_loss' in fold_result
+            assert 'test_indices' in fold_result
+            assert 'predictions' in fold_result
+        
+        # Check that output files were created
+        for i in range(simple_cv_spec.n_splits):
+            assert (tmp_path / f"fold_{i}_model.pkl").exists()
+            assert (tmp_path / f"fold_{i}_results.csv").exists()
+        
+        assert (tmp_path / "cv_summary.csv").exists()
+        assert (tmp_path / "all_predictions.csv").exists()    
+
+    def test_run_cross_validation_no_output_folder(
+        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        simple_dataframe
+    ):
+        """Test run_cross_validation without output folder."""
+        
+        # Patch the fold indices to ensure a valid split
+        with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
+            # Create a split where all categories appear in both train and test
+            mock_indices.return_value = (
+                np.array([0, 1, 2, 3]), 
+                np.array([4, 5, 6, 7])
+            )
+            
+            # Run cross-validation without output folder
+            results = run_cross_validation(
+                simple_dataframe,
+                simple_dataset_spec,
+                simple_cv_spec,
+                simple_model_spec,
+                random_seed=42,
+                output_folder=None
+            )
+        
+        # Check the structure of the results
+        assert 'fold_results' in results
+        assert 'average_loss' in results
+        assert 'std_loss' in results
+        assert 'all_predictions' in results
+        
+        # Check that the right number of folds were completed
+        assert len(results['fold_results']) == simple_cv_spec.n_splits
+
+    def test_run_cross_validation_overwrite_files(
+        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        simple_dataframe, tmp_path, monkeypatch
+    ):
+        """Test overwrite_files flag in run_cross_validation."""
+        
+        # Patch the fold indices to ensure a valid split
+        with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
+            # Create a split where all categories appear in both train and test
+            mock_indices.return_value = (
+                np.array([0, 1, 2, 3]), 
+                np.array([4, 5, 6, 7])
+            )
+            
+            # First run to create initial files
+            run_cross_validation(
+                simple_dataframe,
+                simple_dataset_spec,
+                simple_cv_spec,
+                simple_model_spec,
+                random_seed=42,
+                output_folder=str(tmp_path)
+            )
+        
+        # Modify one of the output files to detect if it gets overwritten
+        fold0_results_path = tmp_path / "fold_0_results.csv"
+        original_df = pd.read_csv(fold0_results_path)
+        modified_df = original_df.copy()
+        modified_df['fold_loss'] = 999.0  # Clearly modified value
+        modified_df.to_csv(fold0_results_path, index=False)
+        
+        # Mock fit_single_fold to track calls
+        original_fit_single_fold = fit_single_fold
+        mock_calls = []
+        
+        def mock_fit_single_fold(*args, **kwargs):
+            mock_calls.append((args, kwargs))
+            return original_fit_single_fold(*args, **kwargs)
+        
+        monkeypatch.setattr(
+            'mixalot.crossval.fit_single_fold', mock_fit_single_fold
+        )
+        
+        # Patch the fold indices again for the second run
+        with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
+            mock_indices.return_value = (
+                np.array([0, 1, 2, 3]), 
+                np.array([4, 5, 6, 7])
+            )
+            
+            # Run again with overwrite_files=False (default)
+            run_cross_validation(
+                simple_dataframe,
+                simple_dataset_spec,
+                simple_cv_spec,
+                simple_model_spec,
+                random_seed=42,
+                output_folder=str(tmp_path)
+            )
+        
+        # Check that fit_single_fold was not called (files not overwritten)
+        assert len(mock_calls) == 0
+        
+        # Verify the modified file was not changed
+        df_after = pd.read_csv(fold0_results_path)
+        assert df_after['fold_loss'].iloc[0] == 999.0
+        
+        # Reset mock and patch again for the third run
+        mock_calls.clear()
+        
+        with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
+            mock_indices.return_value = (
+                np.array([0, 1, 2, 3]), 
+                np.array([4, 5, 6, 7])
+            )
+            
+            # Run again with overwrite_files=True
+            run_cross_validation(
+                simple_dataframe,
+                simple_dataset_spec,
+                simple_cv_spec,
+                simple_model_spec,
+                random_seed=42,
+                output_folder=str(tmp_path),
+                overwrite_files=True
+            )
+        
+        # Check that fit_single_fold was called
+        assert len(mock_calls) == simple_cv_spec.n_splits
+        
+        # Verify the file was overwritten
+        df_after = pd.read_csv(fold0_results_path)
+        assert df_after['fold_loss'].iloc[0] != 999.0
+
+    def test_run_cross_validation_rerun_folds(
+        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        simple_dataframe, tmp_path, monkeypatch
+    ):
+        """Test rerun_folds flag in run_cross_validation."""
+        # First run to create initial files
+        run_cross_validation(
+            simple_dataframe,
+            simple_dataset_spec,
+            simple_cv_spec,
+            simple_model_spec,
+            random_seed=42,
+            output_folder=str(tmp_path)
+        )
+        
+        # Mock fit_single_fold to track calls
+        original_fit_single_fold = fit_single_fold
+        mock_calls = []
+        
+        def mock_fit_single_fold(*args, **kwargs):
+            mock_calls.append((args, kwargs))
+            return original_fit_single_fold(*args, **kwargs)
+        
+        monkeypatch.setattr(
+            'mixalot.crossval.fit_single_fold', mock_fit_single_fold
+        )
+        
+        # Run with rerun_folds=True
+        run_cross_validation(
+            simple_dataframe,
+            simple_dataset_spec,
+            simple_cv_spec,
+            simple_model_spec,
+            random_seed=42,
+            output_folder=str(tmp_path),
+            rerun_folds=True
+        )
+        
+        # Check that fit_single_fold was called for each fold
+        assert len(mock_calls) == simple_cv_spec.n_splits
+
+    def test_run_cross_validation_input_validation(
+        self, simple_dataset_spec, simple_model_spec, simple_cv_spec
+    ):
+        """Test input validation in run_cross_validation."""
+        # Create a dataframe missing a required column
+        df_missing_column = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            # 'var2' is missing
+            'var3': [0.5, 1.2, 0.8]
+        })
+        
+        # Test with missing column
+        with pytest.raises(ValueError, 
+                          match="Dataframe is missing required columns"):
+            run_cross_validation(
+                df_missing_column,
+                simple_dataset_spec,
+                simple_cv_spec,
+                simple_model_spec
+            )
+        
+        # Test with invalid cv_spec
+        invalid_cv_spec = type('InvalidCVSpec', (), {})()
+        with pytest.raises(ValueError, 
+                          match="cv_spec must be a CrossValidationFoldsSpec"):
+            run_cross_validation(
+                pd.DataFrame({
+                    'var1': ['a'], 'var2': ['low'], 'var3': [0.5]
+                }),
+                simple_dataset_spec,
+                invalid_cv_spec,
+                simple_model_spec
+            )
+        
+        # Test with invalid model_spec
+        invalid_model_spec = type('InvalidModelSpec', (), {})()
+        with pytest.raises(ValueError, 
+                          match="model_spec must be a SingleTargetModelSpec"):
+            run_cross_validation(
+                pd.DataFrame({
+                    'var1': ['a'], 'var2': ['low'], 'var3': [0.5]
+                }),
+                simple_dataset_spec,
+                simple_cv_spec,
+                invalid_model_spec
+            )
+
+    def test_run_cross_validation_fold_error_handling(
+        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        simple_dataframe, tmp_path, monkeypatch
+    ):
+        """Test handling of errors in individual folds."""
+        
+        # Mock fit_single_fold to fail on the first fold only
+        def mock_fit_single_fold(*args, **kwargs):
+            if args[4] == 0:  # fold_idx is 0
+                raise ValueError("Simulated error in first fold")
+            
+            # For fold_idx 1, we need to patch the fold indices
+            # to ensure a valid split for the remaining fold
+            mock_indices = patch.object(simple_cv_spec, 'get_fold_indices')
+            with mock_indices as indices_mock:
+                indices_mock.return_value = (
+                    np.array([0, 1, 2, 3]), 
+                    np.array([4, 5, 6, 7])
+                )
+                return fit_single_fold(*args, **kwargs)
+        
+        monkeypatch.setattr(
+            'mixalot.crossval.fit_single_fold', mock_fit_single_fold
+        )
+        
+        # Run cross-validation with the failing first fold
+        results = run_cross_validation(
+            simple_dataframe,
+            simple_dataset_spec,
+            simple_cv_spec,
+            simple_model_spec,
+            random_seed=42,
+            output_folder=str(tmp_path)
+        )
+        
+        # Check that the function continued despite the first fold failing
+        assert results['n_folds_completed'] == simple_cv_spec.n_splits - 1
+        assert results['n_folds_total'] == simple_cv_spec.n_splits
+        assert len(results['fold_results']) == simple_cv_spec.n_splits - 1
+        
+        # Check that only the successful fold has output files
+        assert not (tmp_path / "fold_0_model.pkl").exists()
+        assert not (tmp_path / "fold_0_results.csv").exists()
+        assert (tmp_path / "fold_1_model.pkl").exists()
+        assert (tmp_path / "fold_1_results.csv").exists()
+        assert (tmp_path / "cv_summary.csv").exists()
+
+    def test_run_cross_validation_numerical_target(
+        self, simple_dataset_spec, simple_numerical_model_spec, simple_cv_spec,
+        simple_dataframe, tmp_path
+    ):
+        """Test run_cross_validation with numerical target variable."""
+        # Run cross-validation with numerical target
+        results = run_cross_validation(
+            simple_dataframe,
+            simple_dataset_spec,
+            simple_cv_spec,
+            simple_numerical_model_spec,
+            random_seed=42,
+            output_folder=str(tmp_path)
+        )
+        
+        # Check that loss type is mean_squared_error for regression
+        assert results['loss_type'] == 'mean_squared_error'
+        
+        # Check format of predictions
+        for idx, pred in results['all_predictions'].items():
+            assert isinstance(pred, (float, int))
+            
+        # Check that the CSV files were created correctly
+        fold0_results = pd.read_csv(tmp_path / "fold_0_results.csv")
+        all_predictions = pd.read_csv(tmp_path / "all_predictions.csv")
+        
+        # Regression results should have 'prediction' column, not 'prob_*'
+        assert 'prediction' in fold0_results.columns
+        assert 'prediction' in all_predictions.columns
+        assert not any(col.startswith('prob_') 
+                      for col in fold0_results.columns)

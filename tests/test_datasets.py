@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from mixalot.datasets import (
+    AnnEnsembleDataset,
     DatasetSpec,
     MixedDataset,
     VarSpec,
@@ -814,3 +815,394 @@ class TestMixedDataset:
         assert torch.all(mixed_dataset.Xcat == torch.tensor(Xcat))
         assert torch.all(mixed_dataset.Xnum == torch.tensor(Xnum,
                                                             dtype=torch.float))
+
+
+class TestAnnEnsembleDataset:
+    """Tests for the AnnEnsembleDataset class."""
+
+    def test_init(self):
+        """Test initialization of AnnEnsembleDataset."""
+        # Create a simple MixedDataset
+        cat_var1 = VarSpec(
+            'cat_var1', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        cat_var2 = VarSpec(
+            'cat_var2', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var = VarSpec('num_var', 'numerical')
+        
+        dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [num_var])
+        
+        # Create sample data
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xnum = np.array([[0.5], [1.5]], dtype=np.float32)
+        
+        # Create model spec with cat_var1 as target
+        model_spec = RandomForestSpec(
+            y_var='cat_var1',
+            independent_vars=['cat_var2', 'num_var'],
+            hyperparameters={
+                'n_estimators': 10,
+                'max_features': {'type': 'float', 'value': 0.7}
+            }
+        )
+        
+        # Create MixedDataset
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xnum=Xnum,
+            model_spec=model_spec
+        )
+        
+        # Create AnnEnsembleDataset
+        ann_dataset = AnnEnsembleDataset(mixed_dataset)
+        
+        # Check that the dataset has the right length
+        assert len(ann_dataset) == len(mixed_dataset)
+        
+        # Check that it wraps the mixed_dataset
+        assert ann_dataset.mixed_dataset == mixed_dataset
+        
+        # Check default value of allow_missing_y_values
+        assert ann_dataset.allow_missing_y_values is False
+
+    def test_getitem(self):
+        """Test __getitem__ method with all tensor types."""
+        # Create a MixedDataset with all types of tensors
+        cat_var = VarSpec(
+            'cat_var', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        ord_var = VarSpec(
+            'ord_var', 'ordinal', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var = VarSpec('num_var', 'numerical')
+        
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var])
+        
+        # Create sample data
+        Xcat = np.array([[1], [2]], dtype=np.int32)
+        Xord = np.array([[2], [1]], dtype=np.int32)
+        Xnum = np.array([[0.5], [1.5]], dtype=np.float32)
+        
+        # Create model spec with cat_var as target
+        model_spec = RandomForestSpec(
+            y_var='cat_var',
+            independent_vars=['ord_var', 'num_var'],
+            hyperparameters={
+                'n_estimators': 10,
+                'max_features': {'type': 'float', 'value': 0.7}
+            }
+        )
+        
+        # Create MixedDataset
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xord=Xord,
+            Xnum=Xnum,
+            model_spec=model_spec
+        )
+        
+        # Create AnnEnsembleDataset
+        ann_dataset = AnnEnsembleDataset(mixed_dataset)
+        
+        # Get an item
+        features, target = ann_dataset[0]
+        
+        # Check that features and target have the right shape
+        # Features should include ordinal and numerical values plus the
+        # numerical mask
+        assert len(features) == 3  # Xord + Xnum + Mnum
+        
+        # Target should be adjusted to 0-indexed (1-1=0)
+        assert target == 0
+
+    def test_missing_y_values_not_allowed(self):
+        """Test that an error is raised for missing target values by default."""
+        # Create a MixedDataset with missing target values
+        cat_var = VarSpec(
+            'cat_var', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        ord_var = VarSpec(
+            'ord_var', 'ordinal', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var = VarSpec('num_var', 'numerical')
+        
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var])
+        
+        # Create sample data with missing target value (cat_var = 0)
+        Xcat = np.array([[0], [2]], dtype=np.int32)  # 0 is missing
+        Xord = np.array([[2], [1]], dtype=np.int32)
+        Xnum = np.array([[0.5], [1.5]], dtype=np.float32)
+        
+        # Create model spec with cat_var as target
+        model_spec = RandomForestSpec(
+            y_var='cat_var',
+            independent_vars=['ord_var', 'num_var'],
+            hyperparameters={
+                'n_estimators': 10,
+                'max_features': {'type': 'float', 'value': 0.7}
+            }
+        )
+        
+        # Create MixedDataset
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xord=Xord,
+            Xnum=Xnum,
+            model_spec=model_spec
+        )
+        
+        # Create AnnEnsembleDataset with default allow_missing_y_values=False
+        ann_dataset = AnnEnsembleDataset(mixed_dataset)
+        
+        # Accessing the first item should raise an error (missing target)
+        with pytest.raises(ValueError) as excinfo:
+            ann_dataset[0]
+        
+        assert "Missing target value detected" in str(excinfo.value)
+        
+        # Second item should be accessible (non-missing target)
+        features, target = ann_dataset[1]
+        assert target == 1  # 2-1=1 (adjusted for 0-indexing)
+
+    def test_missing_y_values_allowed(self):
+        """Test that missing target values are allowed when specified."""
+        # Create a MixedDataset with missing target values
+        cat_var = VarSpec(
+            'cat_var', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        ord_var = VarSpec(
+            'ord_var', 'ordinal', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var = VarSpec('num_var', 'numerical')
+        
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var])
+        
+        # Create sample data with missing target value (cat_var = 0)
+        Xcat = np.array([[0], [2]], dtype=np.int32)  # 0 is missing
+        Xord = np.array([[2], [1]], dtype=np.int32)
+        Xnum = np.array([[0.5], [1.5]], dtype=np.float32)
+        
+        # Create model spec with cat_var as target
+        model_spec = RandomForestSpec(
+            y_var='cat_var',
+            independent_vars=['ord_var', 'num_var'],
+            hyperparameters={
+                'n_estimators': 10,
+                'max_features': {'type': 'float', 'value': 0.7}
+            }
+        )
+        
+        # Create MixedDataset
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xord=Xord,
+            Xnum=Xnum,
+            model_spec=model_spec
+        )
+        
+        # Create AnnEnsembleDataset with allow_missing_y_values=True
+        ann_dataset = AnnEnsembleDataset(mixed_dataset,
+                                         allow_missing_y_values=True)
+        
+        # Now accessing the first item should not raise an error
+        features, target = ann_dataset[0]
+        
+        # Target value is missing (0), adjusted to -1 (0-1=-1)
+        assert target == -1
+        
+        # Check features
+        assert len(features) == 3  # Xord + Xnum + Mnum
+        assert features[0] == 2.0  # ord_var
+        assert features[1] == 0.5  # num_var
+        assert features[2] == 1.0  # Numerical mask (1=not missing)
+
+    def test_getitem_with_missing_x_values(self):
+        """Test __getitem__ method with missing feature values."""
+        # Create a MixedDataset with missing feature values
+        cat_var = VarSpec(
+            'cat_var', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        ord_var = VarSpec(
+            'ord_var', 'ordinal', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var = VarSpec('num_var', 'numerical')
+        
+        dataset_spec = DatasetSpec([cat_var], [ord_var], [num_var])
+        
+        # Create sample data with missing feature values
+        Xcat = np.array([[1], [0]], dtype=np.int32)  # 0 is missing in second row
+        Xord = np.array([[0], [1]], dtype=np.int32)  # 0 is missing in first row
+        Xnum = np.array([[np.nan], [0.5]], dtype=np.float32)  # NaN is missing
+        
+        # Create model spec with num_var as target
+        model_spec = RandomForestSpec(
+            y_var='num_var',
+            independent_vars=['cat_var', 'ord_var'],
+            hyperparameters={
+                'n_estimators': 10,
+                'max_features': {'type': 'float', 'value': 0.7}
+            }
+        )
+        
+        # Create MixedDataset
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xord=Xord,
+            Xnum=Xnum,
+            model_spec=model_spec
+        )
+        
+        # Create AnnEnsembleDataset
+        ann_dataset = AnnEnsembleDataset(mixed_dataset)
+        
+        # Get first item (ord missing, cat present, num is target)
+        features, target = ann_dataset[0]
+        
+        # Check features
+        assert len(features) == 2  # Xcat + Xord
+        assert features[0] == 1.0  # cat_var value
+        assert features[1] == 0.0  # ord_var value (missing)
+        
+        # Target is nan, adjusted to nan-1=nan
+        assert torch.isnan(target)
+        
+        # Get second item (cat missing, ord present, num is target)
+        features, target = ann_dataset[1]
+        
+        # Check features
+        assert len(features) == 2  # Xcat + Xord
+        assert features[0] == 0.0  # cat_var value (missing)
+        assert features[1] == 1.0  # ord_var value
+        
+        # Target is 0.5, adjusted to 0.5-1=-0.5
+        assert target == pytest.approx(-0.5)
+
+    def test_combined_features(self):
+        """Test that features are properly combined."""
+        # Create a MixedDataset with all types of tensors
+        cat_var1 = VarSpec(
+            'cat_var1', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        cat_var2 = VarSpec(
+            'cat_var2', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        ord_var1 = VarSpec(
+            'ord_var1', 'ordinal', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        ord_var2 = VarSpec(
+            'ord_var2', 'ordinal', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var1 = VarSpec('num_var1', 'numerical')
+        num_var2 = VarSpec('num_var2', 'numerical')
+        
+        dataset_spec = DatasetSpec(
+            [cat_var1, cat_var2], 
+            [ord_var1, ord_var2], 
+            [num_var1, num_var2]
+        )
+        
+        # Create sample data
+        Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xord = np.array([[1, 2], [2, 1]], dtype=np.int32)
+        Xnum = np.array([[0.5, 0.2], [1.5, 0.8]], dtype=np.float32)
+        
+        # Create model spec with num_var1 as target
+        model_spec = RandomForestSpec(
+            y_var='num_var1',
+            independent_vars=[
+                'cat_var1', 'cat_var2', 'ord_var1', 'ord_var2', 'num_var2'
+            ],
+            hyperparameters={
+                'n_estimators': 10,
+                'max_features': {'type': 'float', 'value': 0.7}
+            }
+        )
+        
+        # Create MixedDataset
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xord=Xord,
+            Xnum=Xnum,
+            model_spec=model_spec
+        )
+        
+        # Create AnnEnsembleDataset
+        ann_dataset = AnnEnsembleDataset(mixed_dataset)
+        
+        # Get an item
+        features, target = ann_dataset[0]
+        
+        # Check that features have the right length
+        # Should include 2 categorical, 2 ordinal, 1 numerical, 1 numerical
+        # mask
+        assert len(features) == 6
+        
+        # Check categorical features
+        assert features[0] == 1.0  # cat_var1
+        assert features[1] == 2.0  # cat_var2
+        
+        # Check ordinal features
+        assert features[2] == 1.0  # ord_var1
+        assert features[3] == 2.0  # ord_var2
+        
+        # Check numerical feature and mask
+        assert features[4] == 0.2  # num_var2
+        assert features[5] == 1.0  # Numerical mask (1=not missing)
+        
+        # Target is 0.5, but adjusted to 0.5-1=-0.5
+        assert target == pytest.approx(-0.5)
+
+    def test_null_target(self):
+        """Test __getitem__ when target is None."""
+        # Create a MixedDataset without a model_spec (no y_var)
+        cat_var = VarSpec(
+            'cat_var', 'categorical', 
+            categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
+        )
+        num_var = VarSpec('num_var', 'numerical')
+        
+        dataset_spec = DatasetSpec([cat_var], [], [num_var])
+        
+        # Create sample data
+        Xcat = np.array([[1], [2]], dtype=np.int32)
+        Xnum = np.array([[0.5], [1.5]], dtype=np.float32)
+        
+        # Create MixedDataset without model_spec
+        mixed_dataset = MixedDataset(
+            dataset_spec,
+            Xcat=Xcat,
+            Xnum=Xnum
+            # No model_spec provided
+        )
+        
+        # Create AnnEnsembleDataset
+        ann_dataset = AnnEnsembleDataset(mixed_dataset)
+        
+        # The test should expect ValueError because
+        # MixedDataset.__getitem__ returns only 4 elements when there's no
+        # target (not 5 as expected)
+        with pytest.raises(ValueError) as excinfo:
+            _, _ = ann_dataset[0]
+        
+        assert "Expected 5 elements in item" in str(excinfo.value)

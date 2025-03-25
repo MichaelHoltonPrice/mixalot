@@ -538,3 +538,69 @@ class MixedDataset(Dataset):
                 - y_data (torch.Tensor or None): Target data
         """
         return (self.Xcat, self.Xord, self.Xnum, self.y_data)
+
+
+class AnnEnsembleDataset(torch.utils.data.Dataset):
+    """Dataset adapter for ANN ensemble training.
+    
+    This class wraps a MixedDataset to provide the format expected by
+    PyTorch's DataLoader for neural network training. It combines
+    the various feature tensors from MixedDataset and adjusts target
+    values for PyTorch's 0-indexing.
+    
+    Args:
+        mixed_dataset: A MixedDataset instance to wrap.
+        allow_missing_y_values: If False (default), raises an error when 
+            encountering missing target values. If True, allows missing
+            targets.
+    """
+    def __init__(self, mixed_dataset, allow_missing_y_values=False):
+        self.mixed_dataset = mixed_dataset
+        self.allow_missing_y_values = allow_missing_y_values
+    
+    def __len__(self):
+        return len(self.mixed_dataset)
+
+    def __getitem__(self, idx):
+        # Get item from mixed_dataset including masks
+        item = self.mixed_dataset[idx]
+        
+        # Unpack the item based on structure
+        # MixedDataset.__getitem__ returns a list:
+        # [Xcat, Xord, Xnum, Mnum, y_data]
+        if len(item) != 5:
+            raise ValueError(
+                f"Expected 5 elements in item, but got {len(item)}. Perhaps "
+                "a y-variable needs to be set."
+            )
+        Xcat, Xord, Xnum, Mnum, y = item
+        
+        # Combine all features (including masks for missing values)
+        features = []
+        if Xcat is not None:
+            features.append(Xcat.float())
+        if Xord is not None:
+            features.append(Xord.float())
+        if Xnum is not None:
+            features.append(Xnum.float())
+        if Mnum is not None:
+            features.append(Mnum.float())
+        
+        X_combined = torch.cat(features)
+        
+        # Check for missing target values (encoded as 0)
+        if (y is not None and torch.any(y == 0) and
+            not self.allow_missing_y_values):
+            raise ValueError(
+                f"Missing target value detected at index {idx}. "
+                f"Set allow_missing_y_values=True to allow missing targets."
+            )
+        
+        # Adjust y for PyTorch's 0-indexing (subtract 1)
+        # Use squeeze() to ensure it's a 1D tensor
+        if y is not None:
+            y_adjusted = (y - 1).squeeze()
+        else:
+            y_adjusted = None
+        
+        return X_combined, y_adjusted

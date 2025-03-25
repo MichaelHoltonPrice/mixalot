@@ -370,6 +370,163 @@ def dataframe_to_mixed_dataset(
     )
 
 
+def _fit_model(
+    train_dataset: 'MixedDataset',
+    model_spec: 'SingleTargetModelSpec',
+    random_seed: Optional[int]
+):
+    """Fit a model based on the provided specification.
+    
+    Args:
+        train_dataset: The training dataset.
+        model_spec: The model specification.
+        random_seed: Seed for reproducibility.
+        
+    Returns:
+        Trained model object.
+        
+    Raises:
+        ValueError: If model type is not supported.
+    """
+    if isinstance(model_spec, RandomForestSpec):
+        return train_random_forest(train_dataset, model_spec, random_seed)
+    else:
+        raise ValueError(
+            f"Unsupported model type: {type(model_spec).__name__}"
+        )
+
+
+def _calculate_losses(
+    model,
+    features,
+    true_values,
+    is_classifier: bool
+):
+    """Calculate predictions and losses for a set of observations.
+    
+    Args:
+        model: The trained model.
+        features: The feature matrix.
+        true_values: The true target values.
+        is_classifier: Whether this is a classification problem.
+        
+    Returns:
+        Tuple containing (predictions, losses).
+        For classification: predictions is a list of probability arrays.
+        For regression: predictions is a list of scalar values.
+        Losses is a list of loss values (one per observation).
+    """
+    predictions = []
+    losses = []
+    
+    if is_classifier:
+        # For classification models, get predicted probabilities
+        pred_proba = model.predict_proba(features)
+        classes = model.classes_
+        
+        # Process each observation
+        for i in range(len(true_values)):
+            true_label = true_values[i]
+            probs = pred_proba[i]
+            
+            # Store prediction
+            predictions.append(probs)
+            
+            # Calculate log loss for this observation
+            true_label_array = np.array([true_label])
+            pred_proba_array = np.array([probs])
+            loss = log_loss(true_label_array, pred_proba_array, labels=classes)
+            losses.append(loss)
+    else:
+        # For regression models, get direct predictions
+        pred_values = model.predict(features)
+        
+        # Process each observation
+        for i in range(len(true_values)):
+            true_value = true_values[i]
+            pred_value = pred_values[i]
+            
+            # Store prediction
+            predictions.append(pred_value)
+            
+            # Calculate squared error for this observation
+            loss = (true_value - pred_value) ** 2
+            losses.append(loss)
+    
+    return predictions, losses
+
+
+def _process_fold_observations(
+    model,
+    dataset,
+    indices,
+    fold_idx,
+    sample_type,
+    dataframe_indices,
+    is_classifier: bool
+):
+    """Process observations for a fold and calculate predictions and losses.
+    
+    Args:
+        model: The trained model.
+        dataset: The dataset containing the observations.
+        indices: The indices of the observations in the original dataframe.
+        fold_idx: The fold index.
+        sample_type: 'train' or 'test'.
+        dataframe_indices: The original indices from the dataframe.
+        is_classifier: Whether this is a classification problem.
+        
+    Returns:
+        List of dictionaries, each containing results for one observation.
+    """
+    # Get features and target
+    Xcat, Xord, Xnum, y = dataset.get_arrays()
+    features = combine_features(Xcat, Xord, Xnum)
+    y_np = dataset.y_data.cpu().numpy()
+    
+    # Ensure target is properly shaped
+    if y.ndim > 1 and y.shape[1] == 1:
+        y_np = y_np.squeeze()
+    
+    # Calculate predictions and losses
+    predictions, losses = _calculate_losses(
+        model, features, y_np, is_classifier
+    )
+    
+    # Create result rows
+    results = []
+    for i, idx in enumerate(indices):
+        original_idx = dataframe_indices[idx]
+        true_value = y_np[i]
+        
+        # Create base result row
+        result_row = {
+            'original_index': original_idx,
+            'fold': fold_idx,
+            'sample_type': sample_type,
+            'actual_value': true_value,
+            'loss': losses[i]
+        }
+        
+        # Add prediction details based on problem type
+        if is_classifier:
+            # For classification, add probabilities and predicted class
+            probs = predictions[i]
+            for j, prob in enumerate(probs):
+                result_row[f'pred_prob_class_{j}'] = prob
+            
+            # Add predicted class (highest probability)
+            classes = model.classes_
+            result_row['pred_class'] = classes[np.argmax(probs)]
+        else:
+            # For regression, add the predicted value
+            result_row['prediction'] = predictions[i]
+        
+        results.append(result_row)
+    
+    return results
+
+
 def run_cross_validation(
     dataframe: 'DataFrame',
     dataset_spec: 'DatasetSpec',
@@ -382,33 +539,28 @@ def run_cross_validation(
 ) -> Dict:
     """Perform complete cross-validation using the specified parameters.
     
-    This function runs cross-validation by calling fit_single_fold for each
-    fold and aggregating the results. If an output folder is provided, the
-    function will save the results for each fold to files in that folder.
+    This function runs cross-validation for each fold and records individual
+    observation losses for both in-sample (train) and out-of-sample (test)
+    predictions.
     
     Args:
-        dataframe (pd.DataFrame): The data containing all variables specified
-            in dataset_spec.
-        dataset_spec (DatasetSpec): The specification describing the variables
-            in the dataset.
-        cv_spec (CrossValidationFoldsSpec): The specification for
-            cross-validation folds.
-        model_spec (SingleTargetModelSpec): The model specification.
-        random_seed (int, optional): Seed for reproducibility.
-        output_folder (str, optional): Folder to save results to. If None,
-            results are not saved to disk.
-        overwrite_files (bool): If True, overwrites existing files in the
-            output folder. Default is False.
-        rerun_folds (bool): If True, reruns all folds even if results already
-            exist. Default is False.
+        dataframe: The data containing all variables specified in dataset_spec.
+        dataset_spec: The specification describing the variables in the dataset.
+        cv_spec: The specification for cross-validation folds.
+        model_spec: The model specification.
+        random_seed: Seed for reproducibility.
+        output_folder: Folder to save results to. If None, results aren't saved.
+        overwrite_files: If True, overwrites existing files. Default is False.
+        rerun_folds: If True, reruns all folds. Default is False.
             
     Returns:
         dict: A dictionary containing:
             - 'fold_results': List of results from each fold
-            - 'average_loss': Mean loss across all folds
-            - 'std_loss': Standard deviation of loss across all folds
-            - 'all_predictions': Dictionary mapping test indices to predicted
-                values across all folds
+            - 'observation_results': DataFrame with all observations and their
+              predictions including sample_type ('train' or 'test'), actual
+              values, predictions, and individual losses for each fold
+            - 'test_avg_loss': Average loss across all out-of-sample observations
+            - 'train_avg_loss': Average loss across all in-sample observations
     """
     # Validate input parameters
     _validate_cv_inputs(dataframe, dataset_spec, cv_spec, model_spec)
@@ -419,7 +571,7 @@ def run_cross_validation(
     
     # Initialize containers for results
     fold_results = []
-    all_predictions = {}
+    observation_results = []
     
     # Get y variable type to determine loss type
     y_var = model_spec.y_var
@@ -430,15 +582,16 @@ def run_cross_validation(
     # Run cross-validation for each fold
     for fold_idx in range(cv_spec.n_splits):
         # Check if fold results already exist and should be loaded
+        fold_results_path = None
         if output_folder:
-            # Save model and fold info separately
-            fold_model_path = os.path.join(output_folder,
-                                           f"fold_{fold_idx}_model.pkl")
-            fold_results_path = os.path.join(output_folder,
-                                             f"fold_{fold_idx}_results.csv")
+            fold_model_path = os.path.join(
+                output_folder, f"fold_{fold_idx}_model.pkl"
+            )
+            fold_results_path = os.path.join(
+                output_folder, f"fold_{fold_idx}_results.csv"
+            )
             
-            # If files exist and we're not overwriting or rerunning, load the
-            # existing results
+            # If files exist and we're not overwriting or rerunning, load results
             if (os.path.exists(fold_model_path) and
                 os.path.exists(fold_results_path) and 
                 not overwrite_files and 
@@ -449,171 +602,156 @@ def run_cross_validation(
                         model = pickle.load(f)
                     
                     # Load the results from CSV
-                    results_df = pd.read_csv(fold_results_path)
-                    
-                    # Reconstruct the predictions dictionary
-                    predictions = {}
-                    for _, row in results_df.iterrows():
-                        idx = int(row['index'])
-                        
-                        # For classification, we need to reconstruct the
-                        # probability array
-                        if is_classifier:
-                            # Find all probability columns
-                            prob_columns = [col for col in results_df.columns
-                                            if col.startswith('prob_')]
-                            probs = [row[col] for col in prob_columns]
-                            predictions[idx] = np.array(probs)
-                        else:
-                            # For regression, just extract the prediction
-                            predictions[idx] = row['prediction']
-                    
-                    # Reconstruct the fold result
-                    fold_result = {
-                        'model': model,
-                        'fold_loss': results_df['fold_loss'].iloc[0],
-                        'test_indices': results_df['index'].values,
-                        'predictions': predictions
-                    }
+                    fold_df = pd.read_csv(fold_results_path)
                     
                     print(f"Loaded existing results for fold {fold_idx}")
+                    
+                    # Append to our observation results
+                    observation_results.append(fold_df)
+                    
+                    # Create a minimal fold result object with just the model
+                    fold_result = {
+                        'model': model,
+                        'fold_idx': fold_idx
+                    }
+                    
                     fold_results.append(fold_result)
-                    all_predictions.update(predictions)
                     continue
                 except Exception as e:
                     print(
-                        f"Error loading fold {fold_idx} results: {e}. Will "
-                        "recompute."
+                        f"Error loading fold {fold_idx} results: {e}. "
+                        "Will recompute."
                     )
         
-        # Fit the model on this fold
+        # Process this fold
         try:
-            print(f"Fitting fold {fold_idx + 1} of {cv_spec.n_splits}...")
-            fold_result = fit_single_fold(
-                dataframe,
-                dataset_spec,
-                cv_spec,
-                model_spec,
-                fold_idx,
-                random_seed
+            print(f"Processing fold {fold_idx + 1} of {cv_spec.n_splits}...")
+            
+            # Get train and test indices for the specific fold
+            train_indices, test_indices = cv_spec.get_fold_indices(
+                fold_idx, len(dataframe)
             )
             
-            # Save the results if an output folder is provided
+            # Split the dataframe
+            train_df = dataframe.iloc[train_indices]
+            test_df = dataframe.iloc[test_indices]
+            
+            # Convert train and test dataframes to MixedDataset objects
+            train_dataset = dataframe_to_mixed_dataset(
+                train_df, dataset_spec, model_spec
+            )
+            test_dataset = dataframe_to_mixed_dataset(
+                test_df, dataset_spec, model_spec
+            )
+            
+            # Train the model
+            model = _fit_model(train_dataset, model_spec, random_seed)
+            
+            # Process test (out-of-sample) observations
+            test_results = _process_fold_observations(
+                model,
+                test_dataset,
+                test_indices,
+                fold_idx,
+                'test',
+                dataframe.index,
+                is_classifier
+            )
+            
+            # Process train (in-sample) observations
+            train_results = _process_fold_observations(
+                model,
+                train_dataset,
+                train_indices,
+                fold_idx,
+                'train',
+                dataframe.index,
+                is_classifier
+            )
+            
+            # Combine results
+            fold_obs_results = test_results + train_results
+            
+            # Convert fold results to DataFrame
+            fold_df = pd.DataFrame(fold_obs_results)
+            
+            # Append to overall observation results
+            observation_results.append(fold_df)
+            
+            # Store fold result with model
+            fold_result = {
+                'model': model,
+                'fold_idx': fold_idx
+            }
+            
+            fold_results.append(fold_result)
+            
+            # Save results if an output folder is provided
             if output_folder:
                 # Create output folder if it doesn't exist
                 os.makedirs(output_folder, exist_ok=True)
                 
-                # Save the trained model (can only be saved as pickle)
+                # Save the trained model
                 with open(fold_model_path, 'wb') as f:
-                    pickle.dump(fold_result['model'], f)
+                    pickle.dump(model, f)
                 
-                # Create a DataFrame for CSV export
-                results_data = []
-                for idx in fold_result['test_indices']:
-                    row_data = {'index': idx}
-                    
-                    # Add fold loss to each row for reference
-                    row_data['fold_loss'] = fold_result['fold_loss']
-                    
-                    # Add predictions (different format for classification vs
-                    # regression)
-                    if is_classifier:
-                        # For classification, we need to save the probability
-                        # for each class
-                        probs = fold_result['predictions'][int(idx)]
-                        for i, prob in enumerate(probs):
-                            row_data[f'prob_{i}'] = prob
-                    else:
-                        # For regression, just store the predicted value
-                        row_data['prediction'] =\
-                            fold_result['predictions'][int(idx)]
-                    
-                    results_data.append(row_data)
-                
-                # Save as CSV
-                results_df = pd.DataFrame(results_data)
-                results_df.to_csv(fold_results_path, index=False)
-                
-                print(
-                    f"Saved model for fold {fold_idx} to {fold_model_path}"
-                )
+                # Save fold results as CSV
+                fold_df.to_csv(fold_results_path, index=False)
+                print(f"Saved model for fold {fold_idx} to {fold_model_path}")
                 print(
                     f"Saved results for fold {fold_idx} to {fold_results_path}"
                 )
-            
-            # Append fold results and update all predictions
-            fold_results.append(fold_result)
-            all_predictions.update(fold_result['predictions'])
             
         except Exception as e:
             print(f"Error in fold {fold_idx}: {str(e)}")
             # Continue with next fold instead of failing completely
             continue
     
-    losses = [result['fold_loss'] for result in fold_results]
-    average_loss = np.mean(losses)
-    std_loss = np.std(losses)
+    # Combine all observation results into a single DataFrame
+    all_observations_df = pd.concat(
+        observation_results, ignore_index=True
+    ) if observation_results else pd.DataFrame()
+    
+    # Calculate overall statistics
+    results_summary = {}
+    
+    if not all_observations_df.empty:
+        # Calculate test (out-of-sample) statistics
+        test_obs = all_observations_df[all_observations_df['sample_type'] == 'test']
+        if not test_obs.empty:
+            test_avg_loss = test_obs['loss'].mean()
+            results_summary['test_avg_loss'] = test_avg_loss
         
-    # Determine what type of loss metric was used
-    loss_type = "log_loss" if is_classifier else "mean_squared_error"
+        # Calculate train (in-sample) statistics
+        train_obs = all_observations_df[all_observations_df['sample_type'] == 'train']
+        if not train_obs.empty:
+            train_avg_loss = train_obs['loss'].mean()
+            results_summary['train_avg_loss'] = train_avg_loss
         
-    # Create summary dictionary
+        # Determine what type of loss metric was used
+        loss_type = "log_loss" if is_classifier else "mean_squared_error"
+        results_summary['loss_type'] = loss_type
+    
+    # Add completion statistics
+    results_summary['n_folds_completed'] = len(fold_results)
+    results_summary['n_folds_total'] = cv_spec.n_splits
+    
+    # Save overall results if an output folder is provided
+    if output_folder and not all_observations_df.empty:
+        # Save all observations as CSV
+        all_obs_path = os.path.join(output_folder, "all_observations.csv")
+        all_observations_df.to_csv(all_obs_path, index=False)
+        print(
+            f"Saved all observations with in-sample and out-of-sample results "
+            f"to {all_obs_path}"
+        )
+    
+    # Create the final CV summary dictionary
     cv_summary = {
         'fold_results': fold_results,
-        'average_loss': average_loss,
-        'std_loss': std_loss,
-        'all_predictions': all_predictions,
-        'loss_type': loss_type,
-        'n_folds_completed': len(fold_results),
-        'n_folds_total': cv_spec.n_splits
+        'observation_results': all_observations_df,
+        **results_summary
     }
-        
-    # Save overall summary if an output folder is provided
-    if output_folder:
-        # Save summary as CSV for better human readability
-        summary_path = os.path.join(output_folder, "cv_summary.csv")
-            
-        # Create a DataFrame for the summary
-        summary_data = {
-            'fold': list(range(len(losses))) + ['average', 'std_dev'],
-            'loss': losses + [average_loss, std_loss],
-            'loss_type': [loss_type] * (len(losses) + 2),
-        }
-            
-        # Add CV parameters for reference
-        summary_data['cv_n_splits'] =\
-            [cv_spec.n_splits] * (len(losses) + 2)
-        summary_data['cv_random_state'] =\
-            [cv_spec.random_state] * (len(losses) + 2)
-        summary_data['target_variable'] =\
-            [model_spec.y_var] * (len(losses) + 2)
-            
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_csv(summary_path, index=False)
-            
-        # Also save a comprehensive predictions file
-        all_preds_path = os.path.join(output_folder, "all_predictions.csv")
-            
-        # Create a DataFrame with all predictions
-        preds_data = []
-        for idx, pred in all_predictions.items():
-            row_data = {'index': idx}
-                
-            # Format differently based on classification vs regression
-            if is_classifier:
-                for i, prob in enumerate(pred):
-                    row_data[f'prob_{i}'] = prob
-            else:
-                row_data['prediction'] = pred
-            
-            preds_data.append(row_data)
-         
-        if preds_data:  # Check if we have predictions to save
-            preds_df = pd.DataFrame(preds_data)
-            preds_df.to_csv(all_preds_path, index=False)
-            print(f"Saved all predictions to {all_preds_path}")
-        
-        print(f"Saved cross-validation summary to {summary_path}")
     
     return cv_summary
 

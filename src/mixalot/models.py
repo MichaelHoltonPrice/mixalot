@@ -277,3 +277,149 @@ class RandomForestSpec(SingleTargetModelSpec):
         elif feat_type == 'string':
             raise ValueError("max_features 'type' must be 'int', 'float', "
                             "or 'string'")
+
+
+class ANNEnsembleSpec(SingleTargetModelSpec):
+    """Model specification for Artificial Neural Network Ensemble models.
+    
+    This class defines the configuration for training an ensemble of basic 
+    feed-forward neural networks.
+    
+    Args:
+        y_var: String specifying the dependent variable name.
+        independent_vars: List of strings specifying the names of independent
+            variables to include in the model.
+        hyperparameters: Optional dictionary containing ANN ensemble-specific
+            hyperparameters. Supported parameters include:
+                - hidden_sizes: List of integers specifying the size of each
+                    hidden layer.
+                - dropout_prob: Probability for dropout layers (float between
+                    0 and 1).
+                - num_models: Number of models in the ensemble (int).
+                - batch_size: Size of batches for training (int).
+                - lr: Learning rate (float).
+                - final_lr: Final learning rate for decay schedule (float).
+                - epochs: Number of training epochs (int).
+    """
+    
+    def __init__(
+        self,
+        y_var: str,
+        independent_vars: List[str],
+        hyperparameters: Optional[Dict[str, Any]] = None
+    ):
+        """Initialize an ANNEnsembleSpec object."""
+        super().__init__(y_var, independent_vars, hyperparameters)
+    
+    @property
+    def model_type(self) -> str:
+        """Returns the type of model.
+        
+        Returns:
+            str: 'ann_ensemble'
+        """
+        return 'ann_ensemble'
+    
+    def _validate_model_specific(self, dataset_spec):
+        """Performs ANN Ensemble specific validation.
+        
+        For ANN Ensemble, checks that:
+        1. The target variable is categorical or ordinal
+        2. The hyperparameters are valid for ANN Ensemble
+        
+        Args:
+            dataset_spec: A DatasetSpec object containing variable
+                specifications.
+            
+        Raises:
+            ValueError: If model-specific validations fail.
+        """
+        # Get target variable specification
+        y_var_spec = dataset_spec.get_var_spec(self.y_var)
+        
+        # Check that target variable is categorical or ordinal
+        if y_var_spec.var_type not in ['categorical', 'ordinal']:
+            raise ValueError(
+                f"Target variable '{self.y_var}' must be categorical or "
+                f"ordinal for ANN Ensemble models, got {y_var_spec.var_type}"
+            )
+        
+        # Validate hyperparameters
+        self.validate_hyperparameters()
+
+    def validate_hyperparameters(self):
+        """Validates ANN Ensemble specific hyperparameters.
+        
+        Checks that:
+        1. hidden_sizes is a list of positive integers
+        2. dropout_prob is between 0 and 1
+        3. num_models is a positive integer
+        4. batch_size is a positive integer
+        5. lr and final_lr are positive floats
+        6. epochs is a positive integer
+        
+        Raises:
+            ValueError: If any hyperparameter is invalid.
+        """
+        # Initialize with defaults if not provided
+        if not self.hyperparameters:
+            self.hyperparameters = {}
+        
+        # hidden_sizes validation
+        hidden_sizes = self.hyperparameters.get('hidden_sizes', [32, 16])
+        if not isinstance(hidden_sizes, list) or not all(
+            isinstance(size, int) and size > 0 for size in hidden_sizes
+        ):
+            raise ValueError(
+                "hidden_sizes must be a list of positive integers"
+            )
+        self.hyperparameters['hidden_sizes'] = hidden_sizes
+        
+        # dropout_prob validation
+        dropout_prob = self.hyperparameters.get('dropout_prob', 0.5)
+        if not isinstance(dropout_prob,
+                          (int, float)) or not 0 <= dropout_prob < 1:
+            raise ValueError(
+                "dropout_prob must be a float between 0 and 1"
+            )
+        self.hyperparameters['dropout_prob'] = dropout_prob
+        
+        # num_models validation
+        num_models = self.hyperparameters.get('num_models', 5)
+        if not isinstance(num_models, int) or num_models <= 0:
+            raise ValueError(
+                "num_models must be a positive integer"
+            )
+        self.hyperparameters['num_models'] = num_models
+        
+        # batch_size validation
+        batch_size = self.hyperparameters.get('batch_size', 32)
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError(
+                "batch_size must be a positive integer"
+            )
+        self.hyperparameters['batch_size'] = batch_size
+        
+        # lr validation
+        lr = self.hyperparameters.get('lr', 0.001)
+        if not isinstance(lr, (int, float)) or lr <= 0:
+            raise ValueError(
+                "lr must be a positive float"
+            )
+        self.hyperparameters['lr'] = lr
+        
+        # final_lr validation
+        final_lr = self.hyperparameters.get('final_lr', lr)
+        if not isinstance(final_lr, (int, float)) or final_lr <= 0:
+            raise ValueError(
+                "final_lr must be a positive float"
+            )
+        self.hyperparameters['final_lr'] = final_lr
+        
+        # epochs validation
+        epochs = self.hyperparameters.get('epochs', 100)
+        if not isinstance(epochs, int) or epochs <= 0:
+            raise ValueError(
+                "epochs must be a positive integer"
+            )
+        self.hyperparameters['epochs'] = epochs

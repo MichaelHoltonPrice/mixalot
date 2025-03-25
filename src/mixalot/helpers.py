@@ -236,7 +236,15 @@ def load_model_spec(model_spec_file: str) -> 'SingleTargetModelSpec':
     
     # Create the appropriate model specification based on model_type
     if model_type == 'random_forest':
+        from mixalot.models import RandomForestSpec
         return RandomForestSpec(
+            y_var=model_dict['y_var'],
+            independent_vars=model_dict['independent_vars'],
+            hyperparameters=model_dict.get('hyperparameters', {})
+        )
+    elif model_type == 'ann_ensemble':
+        from mixalot.models import ANNEnsembleSpec
+        return ANNEnsembleSpec(
             y_var=model_dict['y_var'],
             independent_vars=model_dict['independent_vars'],
             hyperparameters=model_dict.get('hyperparameters', {})

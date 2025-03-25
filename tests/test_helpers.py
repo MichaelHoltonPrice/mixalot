@@ -13,7 +13,7 @@ from mixalot.datasets import (
     DatasetSpec,
     VarSpec,
 )
-from mixalot.models import RandomForestSpec
+from mixalot.models import ANNEnsembleSpec, RandomForestSpec
 from mixalot.helpers import (
     combine_features,
     convert_categories_to_codes,
@@ -382,6 +382,46 @@ class TestLoadModelSpec:
             assert model_spec.hyperparameters['n_estimators'] == 100
             assert model_spec.hyperparameters['max_features']['type'] == 'int'
             assert model_spec.hyperparameters['max_features']['value'] == 2
+        finally:
+            # Clean up
+            os.unlink(model_spec_file)
+
+    def test_load_ann_ensemble_spec(self, create_temp_model_spec_file):
+        """Test loading an ANNEnsembleSpec from a JSON file."""
+        # Create a temporary model specification file for ANN Ensemble
+        model_spec_dict = {
+            'model_type': 'ann_ensemble',
+            'y_var': 'target',
+            'independent_vars': ['feature1', 'feature2', 'feature3'],
+            'hyperparameters': {
+                'hidden_sizes': [64, 32],
+                'dropout_prob': 0.3,
+                'num_models': 10,
+                'batch_size': 32,
+                'lr': 0.001,
+                'final_lr': 0.0001,
+                'epochs': 200
+            }
+        }
+        model_spec_file = create_temp_model_spec_file(model_spec_dict)
+        
+        try:
+            # Load the model specification
+            model_spec = load_model_spec(model_spec_file)
+            
+            # Verify the model specification
+            assert isinstance(model_spec, ANNEnsembleSpec)
+            assert model_spec.model_type == 'ann_ensemble'
+            assert model_spec.y_var == 'target'
+            assert model_spec.independent_vars == ['feature1', 'feature2',
+                                                   'feature3']
+            assert model_spec.hyperparameters['hidden_sizes'] == [64, 32]
+            assert model_spec.hyperparameters['dropout_prob'] == 0.3
+            assert model_spec.hyperparameters['num_models'] == 10
+            assert model_spec.hyperparameters['batch_size'] == 32
+            assert model_spec.hyperparameters['lr'] == 0.001
+            assert model_spec.hyperparameters['final_lr'] == 0.0001
+            assert model_spec.hyperparameters['epochs'] == 200
         finally:
             # Clean up
             os.unlink(model_spec_file)

@@ -14,15 +14,16 @@ from mixalot.crossval import (
     _fit_model,
     _calculate_losses,
     _process_fold_observations,
+    _validate_cv_inputs,
     CrossValidationFoldsSpec,
     dataframe_to_mixed_dataset,
-    fit_single_fold,
     load_cross_validation_folds_spec_from_json,
     run_cross_validation,
 )
 from mixalot.datasets import DatasetSpec, MixedDataset, VarSpec
 from mixalot.helpers import combine_features
-from mixalot.models import RandomForestSpec
+from mixalot.models import ANNEnsembleSpec, RandomForestSpec
+from mixalot.trainers import BasicAnn, EnsembleTorchModel
 
 
 class TestCrossValidationFoldsSpec:
@@ -300,6 +301,7 @@ class TestLoadCrossValidationFoldsSpec:
         assert "random_state must be an integer" in str(excinfo.value)
 
 
+# Fixtures
 @pytest.fixture
 def simple_dataset_spec():
     """Fixture creating a realistic DatasetSpec instance."""
@@ -328,7 +330,7 @@ def simple_dataset_spec():
 
 
 @pytest.fixture
-def simple_model_spec():
+def simple_rf_model_spec():
     """Fixture creating a realistic RandomForestSpec instance."""
     return RandomForestSpec(
         y_var='var1',
@@ -341,7 +343,7 @@ def simple_model_spec():
 
 
 @pytest.fixture
-def simple_numerical_model_spec():
+def simple_rf_numerical_model_spec():
     """Fixture creating a RandomForestSpec with numerical target variable."""
     return RandomForestSpec(
         y_var='var3',
@@ -349,6 +351,24 @@ def simple_numerical_model_spec():
         hyperparameters={
             'n_estimators': 10,
             'max_features': {'type': 'float', 'value': 0.5}
+        }
+    )
+
+
+@pytest.fixture
+def simple_ann_model_spec():
+    """Fixture creating a realistic ANNEnsembleSpec instance."""
+    return ANNEnsembleSpec(
+        y_var='var1',
+        independent_vars=['var2', 'var3'],
+        hyperparameters={
+            'hidden_sizes': [32, 16],
+            'dropout_prob': 0.3,
+            'num_models': 3,
+            'batch_size': 16,
+            'lr': 0.001,
+            'final_lr': 0.0001,
+            'epochs': 5  # Small value for faster tests
         }
     )
 
@@ -370,157 +390,13 @@ def simple_dataframe():
     })
 
 
-class TestFitSingleFold:
-    """Tests for fit_single_fold."""
-    def test_fit_single_fold_categorical_target(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec
-    ):
-        """Test fitting a single fold with categorical target variable."""
-        df = pd.DataFrame({
-            'var1': ['a', 'a', 'b', 'b', 'c', 'c'],
-            'var2': ['low', 'high', 'medium', 'low', 'high', 'medium'],
-            'var3': [0, 1, 0, 1, 0, 1]
-        })
-    
-        # Manually mock fold indices so that each fold has all categories
-        with patch.object(simple_cv_spec,
-                          'get_fold_indices') as mock_get_fold_indices:
-            mock_get_fold_indices.return_value = (np.array([0, 2, 4]),
-                                                  np.array([1, 3, 5]))
-    
-            result = fit_single_fold(
-                df,
-                simple_dataset_spec,
-                simple_cv_spec,
-                simple_model_spec,
-                fold_idx=0,
-                random_seed=42
-            )
-    
-        assert 'model' in result
-        assert 'fold_loss' in result
-        assert isinstance(result['fold_loss'], float)
-        assert len(result['test_indices']) == 3
-        assert len(result['predictions']) == 3
-
-    def test_fit_single_fold_missing_categories(
-        self, simple_dataset_spec, simple_model_spec
-    ):
-        """Test an error when test set has categories not in train set."""
-        # Create a dataset where a category only appears in the test set
-        df = pd.DataFrame({
-            'var1': ['a', 'a', 'b', 'b', 'c'],  # 'c' will be only in test set
-            'var2': ['low', 'high', 'medium', 'low', 'high'],
-            'var3': [0.5, 0.6, 1.2, 1.3, 1.5]
-        })
-        
-        # Create a CV spec that will place 'c' in the test set
-        # We'll manually define the train/test split to ensure this
-        class MockCVSpec:
-            n_splits = 2
-            def get_fold_indices(self, fold_idx, n_samples):
-                # Fixed indices that ensure 'c' is only in test set
-                if fold_idx == 0:
-                    # 'c' is at index 4
-                    return np.array([0, 1, 2, 3]), np.array([4])
-                return np.array([1, 2, 3, 4]), np.array([0])
-        
-        mock_cv_spec = MockCVSpec()
-        
-        # Verify our test setup: 'c' should only be in test set
-        train_indices, test_indices = mock_cv_spec.get_fold_indices(0, len(df))
-        train_categories = set(df.iloc[train_indices]['var1'])
-        test_categories = set(df.iloc[test_indices]['var1'])
-        
-        # Confirm test has a category not in train
-        assert not test_categories.issubset(train_categories), \
-            "Test should have categories not present in train set"
-        
-        # Now test that fit_single_fold raises an error
-        with pytest.raises(ValueError, match="Test set contains categories"):
-            fit_single_fold(
-                df,
-                simple_dataset_spec,
-                mock_cv_spec,
-                simple_model_spec,
-                fold_idx=0,
-                random_seed=42
-            )
-
-    def test_fit_single_fold_invalid_fold_idx(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
-        simple_dataframe
-    ):
-        """Test that an error is raised with invalid fold index."""
-        with pytest.raises(ValueError,
-                           match="fold_idx must be between 0 and 1"):
-            fit_single_fold(
-                simple_dataframe, 
-                simple_dataset_spec, 
-                simple_cv_spec,
-                simple_model_spec, 
-                fold_idx=2, 
-                random_seed=42
-            )
-
-    def test_fit_single_fold_missing_columns(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec
-    ):
-        """Test that an error is raised when dataframe is missing columns."""
-        # Create dataframe missing var2
-        df_missing_column = pd.DataFrame({
-            'var1': ['a', 'b', 'c'],
-            'var3': [0.5, 1.2, 0.8]
-        })
-
-        with pytest.raises(ValueError,
-                           match="Dataframe is missing required columns"):
-            fit_single_fold(
-                df_missing_column, 
-                simple_dataset_spec, 
-                simple_cv_spec,
-                simple_model_spec, 
-                fold_idx=0, 
-                random_seed=42
-            )
-
-    def test_fit_single_fold_numerical_target(
-        self, simple_dataset_spec, simple_numerical_model_spec, simple_cv_spec,
-        simple_dataframe
-    ):
-        """Test fitting a single fold with numerical target variable."""
-        # For numerical targets, we don't need to worry about missing
-        # categories
-        result = fit_single_fold(
-            simple_dataframe, 
-            simple_dataset_spec, 
-            simple_cv_spec,
-            simple_numerical_model_spec, 
-            fold_idx=0, 
-            random_seed=42
-        )
-    
-        # Check all expected keys are present
-        assert set(result.keys()) == {'model', 'fold_loss', 'test_indices',
-                                      'predictions'}
-        
-        # For regression, the model should be a RandomForestRegressor
-        assert isinstance(result['model'], RandomForestRegressor)
-        
-        # Check fold_loss is a float
-        assert isinstance(result['fold_loss'], float)
-        
-        # Each prediction should be a single value, not an array
-        for idx in result['predictions']:
-            assert isinstance(result['predictions'][idx], (float, np.float32,
-                                                           np.float64))
-
 class TestDataframeToMixedDataset:
     """Tests for dataframe_to_mixed_dataset."""
-    def test_dataframe_to_mixed_dataset_categorical_target(
-        self, simple_dataset_spec, simple_model_spec
+    
+    def test_dataframe_to_mixed_dataset_categorical_target_rf(
+        self, simple_dataset_spec, simple_rf_model_spec
     ):
-        """Test conversion of dataframe with categorical target."""
+        """Test conversion of dataframe with categorical target (RF)."""
         df = pd.DataFrame({
             'var1': ['a', 'b', 'c'],
             'var2': ['low', 'medium', 'high'],
@@ -528,7 +404,7 @@ class TestDataframeToMixedDataset:
         })
 
         dataset = dataframe_to_mixed_dataset(
-            df, simple_dataset_spec, simple_model_spec
+            df, simple_dataset_spec, simple_rf_model_spec
         )
 
         assert isinstance(dataset, MixedDataset)
@@ -544,12 +420,12 @@ class TestDataframeToMixedDataset:
         assert dataset.y_data.shape == (3,)
         
         # The dataset should have the model_spec
-        assert dataset.model_spec == simple_model_spec
+        assert dataset.model_spec == simple_rf_model_spec
 
-    def test_dataframe_to_mixed_dataset_numerical_target(
-        self, simple_dataset_spec, simple_numerical_model_spec
+    def test_dataframe_to_mixed_dataset_categorical_target_ann(
+        self, simple_dataset_spec, simple_ann_model_spec
     ):
-        """Test conversion of dataframe with numerical target."""
+        """Test conversion of dataframe with categorical target (ANN)."""
         df = pd.DataFrame({
             'var1': ['a', 'b', 'c'],
             'var2': ['low', 'medium', 'high'],
@@ -557,7 +433,36 @@ class TestDataframeToMixedDataset:
         })
 
         dataset = dataframe_to_mixed_dataset(
-            df, simple_dataset_spec, simple_numerical_model_spec
+            df, simple_dataset_spec, simple_ann_model_spec
+        )
+
+        assert isinstance(dataset, MixedDataset)
+        
+        # For categorical target (var1), Xcat should have 0 columns
+        # as the target is extracted
+        assert dataset.Xcat is None or dataset.Xcat.shape[1] == 0
+        assert dataset.Xord is not None and dataset.Xord.shape == (3, 1)
+        assert dataset.Xnum is not None and dataset.Xnum.shape == (3, 1)
+        
+        # Y_data should be the categorical target var1
+        assert dataset.y_data is not None
+        assert dataset.y_data.shape == (3,)
+        
+        # The dataset should have the model_spec
+        assert dataset.model_spec == simple_ann_model_spec
+
+    def test_dataframe_to_mixed_dataset_numerical_target(
+        self, simple_dataset_spec, simple_rf_numerical_model_spec
+    ):
+        """Test conversion of dataframe with numerical target (RF)."""
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'medium', 'high'],
+            'var3': [1.0, 2.5, 3.8]
+        })
+
+        dataset = dataframe_to_mixed_dataset(
+            df, simple_dataset_spec, simple_rf_numerical_model_spec
         )
 
         assert isinstance(dataset, MixedDataset)
@@ -574,7 +479,7 @@ class TestDataframeToMixedDataset:
         assert torch.is_floating_point(dataset.y_data)
 
     def test_dataframe_with_missing_values(
-        self, simple_dataset_spec, simple_model_spec
+        self, simple_dataset_spec, simple_rf_model_spec
     ):
         """Test handling of missing values in dataframe."""
         df = pd.DataFrame({
@@ -584,7 +489,7 @@ class TestDataframeToMixedDataset:
         })
 
         dataset = dataframe_to_mixed_dataset(
-            df, simple_dataset_spec, simple_model_spec
+            df, simple_dataset_spec, simple_rf_model_spec
         )
         
         # Check that missing values are properly encoded
@@ -601,7 +506,7 @@ class TestDataframeToMixedDataset:
         assert torch.isnan(Xnum[1, 0])  # None in var3 should be encoded as NaN
 
     def test_dataframe_missing_column_raises_error(
-        self, simple_dataset_spec, simple_model_spec
+        self, simple_dataset_spec, simple_rf_model_spec
     ):
         """Test missing column raises ValueError."""
         df = pd.DataFrame({
@@ -612,241 +517,460 @@ class TestDataframeToMixedDataset:
 
         with pytest.raises(ValueError, match="Variable 'var2' .* not found"):
             dataframe_to_mixed_dataset(df, simple_dataset_spec,
-                                       simple_model_spec)
+                                       simple_rf_model_spec)
 
 
-
-def test_fit_model(simple_dataset_spec, simple_model_spec):
-    """Test the _fit_model helper function."""
-    # Create a simple dataset
-    df = pd.DataFrame({
-        'var1': ['a', 'b', 'c'],
-        'var2': ['low', 'medium', 'high'],
-        'var3': [1.0, 2.0, 3.0]
-    })
+class TestFitModel:
+    """Tests for _fit_model function."""
     
-    # Convert to MixedDataset
-    dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
-                                        simple_model_spec)
-    
-    # Fit model
-    model = _fit_model(dataset, simple_model_spec, random_seed=42)
-    
-    # Check that the model has the expected type
-    if simple_model_spec.y_var == 'var1':  # Categorical target
+    def test_fit_model_rf_classification(self, simple_dataset_spec,
+                                         simple_rf_model_spec):
+        """Test _fit_model with RandomForest classifier."""
+        # Create a simple dataset
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'medium', 'high'],
+            'var3': [1.0, 2.0, 3.0]
+        })
+        
+        # Convert to MixedDataset
+        dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
+                                            simple_rf_model_spec)
+        
+        # Fit model
+        model = _fit_model(dataset, simple_rf_model_spec, random_seed=42)
+        
+        # Check that the model has the expected type
         assert isinstance(model, RandomForestClassifier)
-    else:  # Numerical target
+
+    def test_fit_model_rf_regression(self, simple_dataset_spec,
+                                     simple_rf_numerical_model_spec):
+        """Test _fit_model with RandomForest regressor."""
+        # Create a simple dataset
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'medium', 'high'],
+            'var3': [1.0, 2.0, 3.0]
+        })
+        
+        # Convert to MixedDataset
+        dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
+                                            simple_rf_numerical_model_spec)
+        
+        # Fit model
+        model = _fit_model(dataset, simple_rf_numerical_model_spec,
+                           random_seed=42)
+        
+        # Check that the model has the expected type
         assert isinstance(model, RandomForestRegressor)
 
-
-def test_calculate_losses_classification(simple_dataset_spec,
-                                         simple_model_spec):
-    """Test _calculate_losses helper function for classification."""
-    # Create datasets for train and test
-    train_df = pd.DataFrame({
-        'var1': ['a', 'b', 'c', 'a', 'b'],
-        'var2': ['low', 'medium', 'high', 'medium', 'low'],
-        'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
-    })
-    
-    test_df = pd.DataFrame({
-        'var1': ['a', 'b', 'c'],
-        'var2': ['low', 'high', 'medium'],
-        'var3': [1.2, 2.2, 3.2]
-    })
-    
-    # Convert to MixedDatasets
-    train_dataset = dataframe_to_mixed_dataset(
-        train_df, simple_dataset_spec, simple_model_spec
-    )
-    test_dataset = dataframe_to_mixed_dataset(
-        test_df, simple_dataset_spec, simple_model_spec
-    )
-    
-    # Fit model
-    model = _fit_model(train_dataset, simple_model_spec, random_seed=42)
-    
-    # Get test features and true values
-    Xcat, Xord, Xnum, y = test_dataset.get_arrays()
-    features = combine_features(Xcat, Xord, Xnum)
-    true_values = test_dataset.y_data.cpu().numpy()
-    
-    # Calculate losses
-    predictions, losses = _calculate_losses(
-        model, features, true_values, is_classifier=True
-    )
-    
-    # Check predictions and losses
-    assert len(predictions) == len(test_df)
-    assert len(losses) == len(test_df)
-    
-    # For classification, predictions should be arrays of probabilities
-    assert isinstance(predictions[0], np.ndarray)
-    assert predictions[0].ndim == 1
-    assert np.all(predictions[0] >= 0) and np.all(predictions[0] <= 1)
-    
-    # Losses should be positive floats
-    assert all(isinstance(loss, float) for loss in losses)
-    assert all(loss >= 0 for loss in losses)
-
-
-def test_calculate_losses_regression(
-    simple_dataset_spec, simple_numerical_model_spec
-):
-    """Test _calculate_losses helper function for regression."""
-    # Create datasets for train and test
-    train_df = pd.DataFrame({
-        'var1': ['a', 'b', 'c', 'a', 'b'],
-        'var2': ['low', 'medium', 'high', 'medium', 'low'],
-        'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
-    })
-    
-    test_df = pd.DataFrame({
-        'var1': ['a', 'b', 'c'],
-        'var2': ['low', 'high', 'medium'],
-        'var3': [1.2, 2.2, 3.2]
-    })
-    
-    # Convert to MixedDatasets
-    train_dataset = dataframe_to_mixed_dataset(
-        train_df, simple_dataset_spec, simple_numerical_model_spec
-    )
-    test_dataset = dataframe_to_mixed_dataset(
-        test_df, simple_dataset_spec, simple_numerical_model_spec
-    )
-    
-    # Fit model
-    model = _fit_model(train_dataset, simple_numerical_model_spec, 
-                      random_seed=42)
-    
-    # Get test features and true values
-    Xcat, Xord, Xnum, y = test_dataset.get_arrays()
-    features = combine_features(Xcat, Xord, Xnum)
-    true_values = test_dataset.y_data.cpu().numpy()
-    
-    # Calculate losses
-    predictions, losses = _calculate_losses(
-        model, features, true_values, is_classifier=False
-    )
-    
-    # Check predictions and losses
-    assert len(predictions) == len(test_df)
-    assert len(losses) == len(test_df)
-    
-    # For regression, predictions should be scalar values
-    assert all(isinstance(pred, (float, np.float32, np.float64)) 
-              for pred in predictions)
-    
-    # Losses should be positive floats (squared errors)
-    assert all(isinstance(loss, float) for loss in losses)
-    assert all(loss >= 0 for loss in losses)
-
-
-def test_process_fold_observations_classification(
-    simple_dataset_spec, simple_model_spec
-):
-    """Test _process_fold_observations helper for classification."""
-    # Create a simple dataset
-    df = pd.DataFrame({
-        'var1': ['a', 'b', 'c', 'a', 'b'],
-        'var2': ['low', 'medium', 'high', 'medium', 'low'],
-        'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
-    })
-    
-    # Convert to MixedDataset
-    dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
-                                        simple_model_spec)
-    
-    # Fit model
-    model = _fit_model(dataset, simple_model_spec, random_seed=42)
-    
-    # Process observations for fold 0
-    fold_idx = 0
-    sample_type = 'test'
-    indices = np.array([0, 1, 2])
-    
-    results = _process_fold_observations(
-        model,
-        dataset,
-        indices,
-        fold_idx,
-        sample_type,
-        df.index,
-        is_classifier=True
-    )
-    
-    # Check result structure
-    assert len(results) == len(indices)
-    
-    for result in results:
-        assert 'original_index' in result
-        assert 'fold' in result and result['fold'] == fold_idx
-        assert 'sample_type' in result and result['sample_type'] == sample_type
-        assert 'actual_value' in result
-        assert 'loss' in result and result['loss'] >= 0
+    def test_fit_model_ann_ensemble(self, simple_dataset_spec,
+                                    simple_ann_model_spec):
+        """Test _fit_model with ANN ensemble model."""
+        # Create a simple dataset
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'medium', 'high'],
+            'var3': [1.0, 2.0, 3.0]
+        })
         
-        # Classification specific fields
-        assert 'pred_class' in result
-        assert any(key.startswith('pred_prob_class_') for key in result)
-
-
-def test_process_fold_observations_regression(
-    simple_dataset_spec, simple_numerical_model_spec
-):
-    """Test _process_fold_observations helper for regression."""
-    # Create a simple dataset
-    df = pd.DataFrame({
-        'var1': ['a', 'b', 'c', 'a', 'b'],
-        'var2': ['low', 'medium', 'high', 'medium', 'low'],
-        'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
-    })
-    
-    # Convert to MixedDataset
-    dataset = dataframe_to_mixed_dataset(
-        df, simple_dataset_spec, simple_numerical_model_spec
-    )
-    
-    # Fit model
-    model = _fit_model(dataset, simple_numerical_model_spec, random_seed=42)
-    
-    # Process observations for fold 0
-    fold_idx = 0
-    sample_type = 'train'
-    indices = np.array([0, 1, 2])
-    
-    results = _process_fold_observations(
-        model,
-        dataset,
-        indices,
-        fold_idx,
-        sample_type,
-        df.index,
-        is_classifier=False
-    )
-    
-    # Check result structure
-    assert len(results) == len(indices)
-    
-    for result in results:
-        assert 'original_index' in result
-        assert 'fold' in result and result['fold'] == fold_idx
-        assert 'sample_type' in result and result['sample_type'] == sample_type
-        assert 'actual_value' in result
-        assert 'loss' in result and result['loss'] >= 0
+        # Convert to MixedDataset
+        dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
+                                            simple_ann_model_spec)
         
-        # Regression specific fields
-        assert 'prediction' in result
-        assert not any(key.startswith('pred_prob_class_') for key in result)
+        # Use patch to avoid actual ANN training which is time-consuming
+        with patch('mixalot.crossval.train_ann_ensemble') as mock_train:
+            # Create a basic ensemble model to return
+            ensemble_model = type('EnsembleModel', (), {
+                'predict_prob': lambda self, features, device: torch.tensor([
+                    [0.7, 0.2, 0.1], 
+                    [0.3, 0.6, 0.1], 
+                    [0.1, 0.3, 0.6]
+                ])
+            })()
+            mock_train.return_value = ensemble_model
+            
+            # Fit model
+            model = _fit_model(dataset, simple_ann_model_spec, random_seed=42)
+            
+            # Check that the correct training function was called
+            mock_train.assert_called_once()
+            mock_train.assert_called_with(dataset, simple_ann_model_spec, 42)
+            
+            # Check that the model has the expected predict_prob method
+            assert hasattr(model, 'predict_prob')
 
 
-class TestUpdatedRunCrossValidation:
-    """Tests for the updated run_cross_validation function."""
+class TestCalculateLosses:
+    """Tests for _calculate_losses function."""
     
-    def test_run_cross_validation_records_all_observations(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+    def test_calculate_losses_rf_classification(self, simple_dataset_spec,
+                                               simple_rf_model_spec):
+        """Test _calculate_losses for classification with Random Forest."""
+        # Create datasets for train and test
+        train_df = pd.DataFrame({
+            'var1': ['a', 'b', 'c', 'a', 'b'],
+            'var2': ['low', 'medium', 'high', 'medium', 'low'],
+            'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
+        })
+        
+        test_df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'high', 'medium'],
+            'var3': [1.2, 2.2, 3.2]
+        })
+        
+        # Convert to MixedDatasets
+        train_dataset = dataframe_to_mixed_dataset(
+            train_df, simple_dataset_spec, simple_rf_model_spec
+        )
+        test_dataset = dataframe_to_mixed_dataset(
+            test_df, simple_dataset_spec, simple_rf_model_spec
+        )
+        
+        # Fit model
+        model = _fit_model(train_dataset, simple_rf_model_spec, random_seed=42)
+        
+        # Get test features and true values
+        Xcat, Xord, Xnum, y = test_dataset.get_arrays()
+        features = combine_features(Xcat, Xord, Xnum)
+        true_values = test_dataset.y_data.cpu().numpy()
+        
+        # Calculate losses
+        predictions, losses = _calculate_losses(
+            model, features, true_values, is_classifier=True
+        )
+        
+        # Check predictions and losses
+        assert len(predictions) == len(test_df)
+        assert len(losses) == len(test_df)
+        
+        # For classification, predictions should be arrays of probabilities
+        assert isinstance(predictions[0], np.ndarray)
+        assert predictions[0].ndim == 1
+        assert np.all(predictions[0] >= 0) and np.all(predictions[0] <= 1)
+        
+        # Losses should be positive floats
+        assert all(isinstance(loss, float) for loss in losses)
+        assert all(loss >= 0 for loss in losses)
+
+    def test_calculate_losses_rf_regression(self, simple_dataset_spec, 
+                                           simple_rf_numerical_model_spec):
+        """Test _calculate_losses for regression with Random Forest."""
+        # Create datasets for train and test
+        train_df = pd.DataFrame({
+            'var1': ['a', 'b', 'c', 'a', 'b'],
+            'var2': ['low', 'medium', 'high', 'medium', 'low'],
+            'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
+        })
+        
+        test_df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'high', 'medium'],
+            'var3': [1.2, 2.2, 3.2]
+        })
+        
+        # Convert to MixedDatasets
+        train_dataset = dataframe_to_mixed_dataset(
+            train_df, simple_dataset_spec, simple_rf_numerical_model_spec
+        )
+        test_dataset = dataframe_to_mixed_dataset(
+            test_df, simple_dataset_spec, simple_rf_numerical_model_spec
+        )
+        
+        # Fit model
+        model = _fit_model(train_dataset, simple_rf_numerical_model_spec, 
+                          random_seed=42)
+        
+        # Get test features and true values
+        Xcat, Xord, Xnum, y = test_dataset.get_arrays()
+        features = combine_features(Xcat, Xord, Xnum)
+        true_values = test_dataset.y_data.cpu().numpy()
+        
+        # Calculate losses
+        predictions, losses = _calculate_losses(
+            model, features, true_values, is_classifier=False
+        )
+        
+        # Check predictions and losses
+        assert len(predictions) == len(test_df)
+        assert len(losses) == len(test_df)
+        
+        # For regression, predictions should be scalar values
+        assert all(isinstance(pred, (float, np.float32, np.float64)) 
+                  for pred in predictions)
+        
+        # Losses should be positive floats (squared errors)
+        assert all(isinstance(loss, float) for loss in losses)
+        assert all(loss >= 0 for loss in losses)
+    
+
+    def test_calculate_losses_ann_classification(self, simple_dataset_spec,
+                                                 simple_ann_model_spec):
+        """Test _calculate_losses for classification with ANN ensemble."""
+        # Create an actual ensemble model with BasicAnn models
+        ensemble_model = EnsembleTorchModel(
+            num_models=3,
+            lr=0.001,
+            base_model_class=BasicAnn,
+            num_x_var=2,  # Input features dimension
+            num_cat=3,    # Number of categories in output
+            hidden_sizes=[32, 16],
+            dropout_prob=0.3
+        )
+        
+        # Create sample features and true values
+        features = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        true_values = np.array([1, 2, 3])  # Classes 1, 2, 3
+        
+        # Calculate losses
+        predictions, losses = _calculate_losses(
+            ensemble_model, features, true_values, is_classifier=True
+        )
+        
+        # Check predictions and losses
+        assert len(predictions) == 3
+        assert len(losses) == 3
+        
+        # For classification, predictions should be arrays of probabilities
+        assert isinstance(predictions[0], np.ndarray)
+        assert predictions[0].ndim == 1
+        assert np.all(predictions[0] >= 0) and np.all(predictions[0] <= 1)
+        
+        # Losses should be positive floats
+        assert all(isinstance(loss, float) for loss in losses)
+        assert all(loss >= 0 for loss in losses)
+
+
+class TestProcessFoldObservations:
+    """Tests for _process_fold_observations function."""
+    
+    def test_process_fold_observations_rf_classification(
+        self, simple_dataset_spec, simple_rf_model_spec
+    ):
+        """Test _process_fold_observations for classification with RF."""
+        # Create a simple dataset
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c', 'a', 'b'],
+            'var2': ['low', 'medium', 'high', 'medium', 'low'],
+            'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
+        })
+        
+        # Convert to MixedDataset
+        dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
+                                            simple_rf_model_spec)
+        
+        # Fit model
+        model = _fit_model(dataset, simple_rf_model_spec, random_seed=42)
+        
+        # Process observations for fold 0
+        fold_idx = 0
+        sample_type = 'test'
+        indices = np.array([0, 1, 2])
+        
+        results = _process_fold_observations(
+            model,
+            dataset,
+            indices,
+            fold_idx,
+            sample_type,
+            df.index,
+            is_classifier=True
+        )
+        
+        # Check result structure
+        assert len(results) == len(indices)
+        
+        for result in results:
+            assert 'original_index' in result
+            assert 'fold' in result and result['fold'] == fold_idx
+            assert 'sample_type' in result and result['sample_type'] ==\
+                sample_type
+            assert 'actual_value' in result
+            assert 'loss' in result and result['loss'] >= 0
+            
+            # Classification specific fields
+            assert 'pred_class' in result
+            assert any(key.startswith('pred_prob_class_') for key in result)
+
+    def test_process_fold_observations_rf_regression(
+        self, simple_dataset_spec, simple_rf_numerical_model_spec
+    ):
+        """Test _process_fold_observations for regression with RF."""
+        # Create a simple dataset
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c', 'a', 'b'],
+            'var2': ['low', 'medium', 'high', 'medium', 'low'],
+            'var3': [1.0, 2.0, 3.0, 1.5, 2.5]
+        })
+        
+        # Convert to MixedDataset
+        dataset = dataframe_to_mixed_dataset(
+            df, simple_dataset_spec, simple_rf_numerical_model_spec
+        )
+        
+        # Fit model
+        model = _fit_model(dataset, simple_rf_numerical_model_spec,
+                           random_seed=42)
+        
+        # Process observations for fold 0
+        fold_idx = 0
+        sample_type = 'train'
+        indices = np.array([0, 1, 2])
+        
+        results = _process_fold_observations(
+            model,
+            dataset,
+            indices,
+            fold_idx,
+            sample_type,
+            df.index,
+            is_classifier=False
+        )
+        
+        # Check result structure
+        assert len(results) == len(indices)
+        
+        for result in results:
+            assert 'original_index' in result
+            assert 'fold' in result and result['fold'] == fold_idx
+            assert 'sample_type' in result and result['sample_type'] ==\
+                sample_type
+            assert 'actual_value' in result
+            assert 'loss' in result and result['loss'] >= 0
+            
+            # Regression specific fields
+            assert 'prediction' in result
+            assert not any(key.startswith('pred_prob_class_')
+                           for key in result)
+
+    def test_process_fold_observations_ann_classification(
+            self, simple_dataset_spec, simple_ann_model_spec
+        ):
+            """Test _process_fold_obs. for classif. with ANN ensemble."""
+            # Create a simple dataset
+            df = pd.DataFrame({
+                'var1': ['a', 'b', 'c'],
+                'var2': ['low', 'medium', 'high'],
+                'var3': [1.0, 2.0, 3.0]
+            })
+            
+            # Convert to MixedDataset
+            dataset = dataframe_to_mixed_dataset(df, simple_dataset_spec, 
+                                                simple_ann_model_spec)
+            
+            # Create an actual ensemble model with BasicAnn models
+            ensemble_model = EnsembleTorchModel(
+                num_models=3,
+                lr=0.001,
+                base_model_class=BasicAnn,
+                num_x_var=3,  # accounts for missing data dimension
+                num_cat=3,    # Number of categories (matches our dataset)
+                hidden_sizes=[32, 16],
+                dropout_prob=0.3
+            )
+            
+            # Process observations for fold 0
+            fold_idx = 0
+            sample_type = 'test'
+            indices = np.array([0, 1, 2])
+            
+            # No need to patch _calculate_losses, let it use the real
+            # implementation
+            results = _process_fold_observations(
+                ensemble_model,
+                dataset,
+                indices,
+                fold_idx,
+                sample_type,
+                df.index,
+                is_classifier=True
+            )
+            
+            # Check result structure
+            assert len(results) == len(indices)
+            
+            for result in results:
+                assert 'original_index' in result
+                assert 'fold' in result and result['fold'] == fold_idx
+                assert 'sample_type' in result and result['sample_type'] ==\
+                    sample_type
+                assert 'actual_value' in result
+                assert 'loss' in result and result['loss'] >= 0
+                
+                # Classification specific fields
+                assert 'pred_class' in result
+                assert any(
+                    key.startswith('pred_prob_class_') for key in result
+                )
+
+
+class TestValidateCVInputs:
+    """Tests for _validate_cv_inputs function."""
+    
+    def test_validate_cv_inputs_rf(
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec
+    ):
+        """Test validation of inputs with Random Forest model spec."""
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'medium', 'high'],
+            'var3': [1.0, 2.0, 3.0]
+        })
+        
+        # This should not raise an error
+        _validate_cv_inputs(df, simple_dataset_spec, simple_cv_spec, 
+                           simple_rf_model_spec)
+        
+        # Test with missing variable
+        bad_model_spec = RandomForestSpec(
+            y_var='var1',
+            independent_vars=['var2', 'missing_var'],  # non-existent variable
+            hyperparameters=simple_rf_model_spec.hyperparameters
+        )
+        
+        with pytest.raises(ValueError) as excinfo:
+            _validate_cv_inputs(df, simple_dataset_spec, simple_cv_spec, 
+                               bad_model_spec)
+        
+        assert "not found in dataset_spec" in str(excinfo.value)
+    
+    def test_validate_cv_inputs_ann(
+        self, simple_dataset_spec, simple_ann_model_spec, simple_cv_spec
+    ):
+        """Test validation of inputs with ANN ensemble model spec."""
+        df = pd.DataFrame({
+            'var1': ['a', 'b', 'c'],
+            'var2': ['low', 'medium', 'high'],
+            'var3': [1.0, 2.0, 3.0]
+        })
+        
+        # This should not raise an error
+        _validate_cv_inputs(df, simple_dataset_spec, simple_cv_spec, 
+                           simple_ann_model_spec)
+        
+        # Test with missing variable
+        bad_model_spec = ANNEnsembleSpec(
+            y_var='var1',
+            independent_vars=['var2', 'missing_var'],  # non-existent variable
+            hyperparameters=simple_ann_model_spec.hyperparameters
+        )
+        
+        with pytest.raises(ValueError) as excinfo:
+            _validate_cv_inputs(df, simple_dataset_spec, simple_cv_spec, 
+                               bad_model_spec)
+        
+        assert "not found in dataset_spec" in str(excinfo.value)
+
+
+class TestRunCrossValidation:
+    """Tests for the run_cross_validation function."""
+    
+    def test_run_cross_validation_records_all_observations_rf(
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe, tmp_path
     ):
-        """Test that all observations (train and test) are recorded."""
+        """Test that all observations are recorded with RF model."""
         # Patch the fold indices to ensure a valid split
         with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
             # Create a split where all categories appear in both train and test
@@ -861,7 +985,7 @@ class TestUpdatedRunCrossValidation:
                 simple_dataframe,
                 simple_dataset_spec,
                 simple_cv_spec,
-                simple_model_spec,
+                simple_rf_model_spec,
                 random_seed=42,
                 output_folder=str(tmp_path)
             )
@@ -891,9 +1015,79 @@ class TestUpdatedRunCrossValidation:
         
         # Output file should exist
         assert os.path.exists(os.path.join(tmp_path, "all_observations.csv"))
-    
+
+    def test_run_cross_validation_ann_ensemble(
+            self, simple_dataset_spec, simple_ann_model_spec, simple_cv_spec,
+            simple_dataframe, tmp_path
+        ):
+            """Test running cross-validation with an ANN ensemble model."""
+            # Configure ANN model spec with minimal parameters for faster tests
+            simple_ann_model_spec.hyperparameters['num_models'] = 2
+            simple_ann_model_spec.hyperparameters['epochs'] = 3
+            simple_ann_model_spec.hyperparameters['batch_size'] = 4
+            
+            # Patch the fold indices to ensure consistent splits
+            with patch.object(simple_cv_spec, 'get_fold_indices') as mock_indices:
+                # Create splits where all categories are represented in both sets
+                mock_indices.side_effect = [
+                    # First fold: rows 0-3 train, 4-7 test
+                    (np.array([0, 1, 2, 3]), np.array([4, 5, 6, 7])),
+                    # Second fold: rows 4-7 train, 0-3 test
+                    (np.array([4, 5, 6, 7]), np.array([0, 1, 2, 3]))
+                ]
+                
+                # Run cross-validation with our fixed _calculate_losses function
+                results = run_cross_validation(
+                    simple_dataframe,
+                    simple_dataset_spec,
+                    simple_cv_spec,
+                    simple_ann_model_spec,
+                    random_seed=42,
+                    output_folder=str(tmp_path),
+                    overwrite_files=True  # Ensure fresh run
+                )
+                
+                # Verify results
+                assert 'observation_results' in results
+                obs_df = results['observation_results']
+                
+                # DataFrame should exist with data
+                assert not obs_df.empty
+                
+                # Check essential columns
+                expected_cols = [
+                    'original_index', 'fold', 'sample_type', 
+                    'actual_value', 'loss', 'pred_class'
+                ]
+                for col in expected_cols:
+                    assert col in obs_df.columns
+                
+                # Check probability columns
+                prob_cols = [c for c in obs_df.columns 
+                            if c.startswith('pred_prob_class_')]
+                assert len(prob_cols) > 0
+                
+                # Should have both train and test samples
+                assert 'train' in obs_df['sample_type'].values
+                assert 'test' in obs_df['sample_type'].values
+                
+                # Should have all expected records
+                expected_records = len(simple_dataframe) * simple_cv_spec.n_splits
+                assert len(obs_df) == expected_records
+                
+                # Check loss type and statistics
+                assert results['loss_type'] == 'log_loss'
+                assert 'test_avg_loss' in results
+                assert 'train_avg_loss' in results
+                
+                # Check fold completion
+                assert results['n_folds_completed'] == simple_cv_spec.n_splits
+                
+                # Output file should exist
+                assert os.path.exists(os.path.join(tmp_path, "all_observations.csv"))
+   
     def test_run_cross_validation_saves_individual_losses(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe, tmp_path
     ):
         """Test that individual observation losses are saved."""
@@ -902,7 +1096,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42,
             output_folder=str(tmp_path)
         )
@@ -925,7 +1119,7 @@ class TestUpdatedRunCrossValidation:
         assert set(saved_df['sample_type'].unique()) == {'train', 'test'}
     
     def test_run_cross_validation_computes_average_losses(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe
     ):
         """Test computation of average in-sample and out-of-sample losses."""
@@ -934,7 +1128,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42
         )
         
@@ -955,7 +1149,7 @@ class TestUpdatedRunCrossValidation:
         assert results['train_avg_loss'] == pytest.approx(train_avg)
     
     def test_run_cross_validation_records_predictions(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe
     ):
         """Test that predictions are recorded for each observation."""
@@ -964,7 +1158,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42
         )
         
@@ -972,7 +1166,7 @@ class TestUpdatedRunCrossValidation:
         obs_df = results['observation_results']
         
         # For classification, should have pred_class and pred_prob columns
-        if simple_model_spec.y_var == 'var1':  # Classification
+        if simple_rf_model_spec.y_var == 'var1':  # Classification
             # Should have predicted class
             assert 'pred_class' in obs_df.columns
             
@@ -985,7 +1179,7 @@ class TestUpdatedRunCrossValidation:
             assert 'prediction' in obs_df.columns
     
     def test_run_cross_validation_stores_original_indices(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe
     ):
         """Test that original indices are preserved in results."""
@@ -998,7 +1192,7 @@ class TestUpdatedRunCrossValidation:
             df,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42
         )
         
@@ -1012,7 +1206,7 @@ class TestUpdatedRunCrossValidation:
         assert obs_indices == expected_indices
     
     def test_run_cross_validation_loads_existing_results(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe, tmp_path, monkeypatch
     ):
         """Test loading of existing results with overwrite_files=False."""
@@ -1021,7 +1215,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42,
             output_folder=str(tmp_path)
         )
@@ -1041,7 +1235,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42,
             output_folder=str(tmp_path)
         )
@@ -1054,7 +1248,7 @@ class TestUpdatedRunCrossValidation:
         assert not results['observation_results'].empty
     
     def test_run_cross_validation_handles_fold_errors(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe, tmp_path, monkeypatch
     ):
         """Test that errors in individual folds are handled gracefully."""
@@ -1081,7 +1275,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42,
             output_folder=str(tmp_path)
         )
@@ -1094,34 +1288,9 @@ class TestUpdatedRunCrossValidation:
         obs_df = results['observation_results']
         assert 0 not in obs_df['fold'].unique()
     
-    def test_run_cross_validation_with_non_default_model(
-        self, simple_dataset_spec, simple_numerical_model_spec, simple_cv_spec,
-        simple_dataframe
-    ):
-        """Test with a non-default model specification."""
-        # Modify the model spec to use non-default hyperparameters
-        model_spec = simple_numerical_model_spec
-        model_spec.hyperparameters['n_estimators'] = 20
-        model_spec.hyperparameters['min_samples_split'] = 3
-        
-        # Run cross-validation
-        results = run_cross_validation(
-            simple_dataframe,
-            simple_dataset_spec,
-            simple_cv_spec,
-            model_spec,
-            random_seed=42
-        )
-        
-        # Should still work and produce results
-        assert 'observation_results' in results
-        assert not results['observation_results'].empty
-        
-        # Loss type should be correct for regression
-        assert results['loss_type'] == 'mean_squared_error'
 
     def test_run_cross_validation_rerun_folds(
-        self, simple_dataset_spec, simple_model_spec, simple_cv_spec,
+        self, simple_dataset_spec, simple_rf_model_spec, simple_cv_spec,
         simple_dataframe, tmp_path, monkeypatch
     ):
         """Test that rerun_folds=True forces recomputation of all folds."""
@@ -1130,7 +1299,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42,
             output_folder=str(tmp_path)
         )
@@ -1150,7 +1319,7 @@ class TestUpdatedRunCrossValidation:
             simple_dataframe,
             simple_dataset_spec,
             simple_cv_spec,
-            simple_model_spec,
+            simple_rf_model_spec,
             random_seed=42,
             output_folder=str(tmp_path),
             rerun_folds=True

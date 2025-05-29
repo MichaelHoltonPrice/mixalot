@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics import log_loss, mean_squared_error
 from sklearn.model_selection import KFold
+import torch
 
 from mixalot.datasets import MixedDataset
 from mixalot.helpers import (
@@ -16,10 +17,7 @@ from mixalot.helpers import (
     convert_categories_to_codes,
     parse_numeric_variable,
 )
-from mixalot.models import RandomForestSpec
-from mixalot.trainers import train_random_forest
-
- 
+from mixalot.trainers import train_ann_ensemble, train_random_forest
 
 class CrossValidationFoldsSpec:
     """Specification for cross-validation folds."""
@@ -153,150 +151,6 @@ def load_cross_validation_folds_spec_from_json(
     )
 
 
-def fit_single_fold(
-    dataframe,
-    dataset_spec,
-    cv_spec,
-    model_spec,
-    fold_idx,
-    random_seed=None
-):
-    """Fit a model on a single fold and calculate test loss.
-    
-    This function takes a dataframe, splits it according to the specified
-    fold index from the cross-validation specification, processes the data
-    into a MixedDataset, trains the model on the training set, and
-    evaluates it on the test set.
-    
-    Args:
-        dataframe (pd.DataFrame): The data containing all variables specified
-            in dataset_spec.
-        dataset_spec (DatasetSpec): The specification describing the variables
-            in the dataset.
-        cv_spec (CrossValidationFoldsSpec): The specification for
-            cross-validation folds.
-        model_spec (RandomForestSpec): The model specification.
-        fold_idx (int): The index of the fold to use (0 to n_splits-1).
-        random_seed (int, optional): Seed for reproducibility.
-        
-    Returns:
-        dict: A dictionary containing:
-            - 'model': The trained model
-            - 'fold_loss': The loss on the test set
-            - 'test_indices': The indices of the test set samples
-            - 'predictions': Dictionary mapping test indices to predicted
-                values (probabilities for classification, direct predictions
-                for regression)
-    """
-    # Validate fold index
-    if fold_idx < 0 or fold_idx >= cv_spec.n_splits:
-        raise ValueError(
-            f"fold_idx must be between 0 and {cv_spec.n_splits - 1}, "
-            f"got {fold_idx}"
-        )
-    
-    # Validate that the dataframe contains all required columns
-    required_columns = list(dataset_spec.all_var_names)
-    missing_columns = [col for col in required_columns 
-                      if col not in dataframe.columns]
-    if missing_columns:
-        raise ValueError(
-            f"Dataframe is missing required columns: {missing_columns}"
-        )
-    
-    # Get the number of samples
-    num_obs = len(dataframe)
-    
-    # Get train and test indices for the specific fold
-    train_indices, test_indices = cv_spec.get_fold_indices(fold_idx, num_obs)
-    
-    # Split the dataframe
-    train_df = dataframe.iloc[train_indices]
-    test_df = dataframe.iloc[test_indices]
-    
-    # Convert train and test dataframes to MixedDataset objects
-    train_dataset = dataframe_to_mixed_dataset(train_df,
-                                               dataset_spec, model_spec)
-    test_dataset = dataframe_to_mixed_dataset(test_df, dataset_spec,
-                                              model_spec)
-    
-    # Is this a classifier (categorical or ordinal) or regressor fit?
-    y_var = model_spec.y_var
-    y_var_spec = dataset_spec.get_var_spec(y_var)
-    y_var_type = y_var_spec.var_type
-    is_classifier = y_var_type in ['categorical', 'ordinal']
-
-    # Get test features and target
-    test_Xcat, test_Xord, test_Xnum, test_y = test_dataset.get_arrays()
-    test_features = combine_features(test_Xcat, test_Xord, test_Xnum)
- 
-    # Convert target to numpy for consistent processing
-    train_y_np = train_dataset.y_data.cpu().numpy()
-    test_y_np = test_dataset.y_data.cpu().numpy()
-
-    # Check if training data contains all categories present in test data
-    if is_classifier:
-        # Convert to numpy for consistency
-        # TODO: we could check for this consistency for all folds prior to
-        #       fitting any of the folds.
-        test_categories = set(np.unique(test_y_np))
-        train_categories = set(np.unique(train_y_np))
-        
-        # Find categories in test set that aren't in training set
-        missing_categories = test_categories - train_categories
-        
-        if missing_categories:
-            raise ValueError(
-                f"Test set contains categories {missing_categories} that "
-                f"are not present in the training set. Consider using a "
-                f"different fold split or stratified cross-validation."
-            )
-
-    # Train the model
-    if isinstance(model_spec, RandomForestSpec):
-        model = train_random_forest(train_dataset, model_spec, random_seed)
-    else:
-        raise ValueError(
-            f"Unsupported model type: {type(model_spec).__name__}"
-        )
-   
-    # Ensure target is properly shaped
-    if test_y.ndim > 1 and test_y.shape[1] == 1:
-        test_y = test_y.squeeze()
-    
-    if is_classifier:
-        # For classification models, get predicted probabilities
-        y_pred_proba = model.predict_proba(test_features)
-        
-        # Get classes for log_loss calculation
-        classes = model.classes_
-        fold_loss = log_loss(test_y_np, y_pred_proba, labels=classes)
-       
-        # Store predictions (probabilities for classification)
-        predictions = {}
-        for i, idx in enumerate(test_indices):
-            predictions[int(idx)] = y_pred_proba[i]
-    else:
-        # For regression models, get direct predictions
-        y_pred = model.predict(test_features)
-        
-        # Calculate regression loss (mean squared error)
-        fold_loss = mean_squared_error(test_y_np, y_pred)
-        
-        # Store predictions (direct values for regression)
-        predictions = {}
-        for i, idx in enumerate(test_indices):
-            predictions[int(idx)] = y_pred[i]
-    
-    # Return model, loss, and predictions
-    return {
-        'model': model,
-        'fold_loss': fold_loss,
-        'test_indices': test_indices,
-        'predictions': predictions
-    }
-
-
 def dataframe_to_mixed_dataset(
     df,
     dataset_spec,
@@ -388,8 +242,13 @@ def _fit_model(
     Raises:
         ValueError: If model type is not supported.
     """
+    # Import model specifications to check types
+    from mixalot.models import RandomForestSpec, ANNEnsembleSpec
+    
     if isinstance(model_spec, RandomForestSpec):
         return train_random_forest(train_dataset, model_spec, random_seed)
+    elif isinstance(model_spec, ANNEnsembleSpec):
+        return train_ann_ensemble(train_dataset, model_spec, random_seed)
     else:
         raise ValueError(
             f"Unsupported model type: {type(model_spec).__name__}"
@@ -405,7 +264,7 @@ def _calculate_losses(
     """Calculate predictions and losses for a set of observations.
     
     Args:
-        model: The trained model.
+        model: The trained model (RandomForest or ANN Ensemble).
         features: The feature matrix.
         true_values: The true target values.
         is_classifier: Whether this is a classification problem.
@@ -419,10 +278,26 @@ def _calculate_losses(
     predictions = []
     losses = []
     
+    # Check if model is an ANN Ensemble
+    is_ann_ensemble = hasattr(model, 'predict_prob')
+    
     if is_classifier:
         # For classification models, get predicted probabilities
-        pred_proba = model.predict_proba(features)
-        classes = model.classes_
+        if is_ann_ensemble:
+            # Convert features to tensor for ANN ensemble
+            features_tensor = torch.tensor(features, dtype=torch.float32)
+            device = torch.device(
+                'cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            # Get probabilities from ANN ensemble
+            pred_proba =\
+                model.predict_prob(features_tensor, device).cpu().numpy()
+            # Classes for ANN ensemble are consecutive integers starting at 1
+            classes = np.arange(1, pred_proba.shape[1] + 1)
+        else:
+            # For RandomForest models
+            pred_proba = model.predict_proba(features)
+            classes = model.classes_
         
         # Process each observation
         for i in range(len(true_values)):
@@ -468,7 +343,7 @@ def _process_fold_observations(
     """Process observations for a fold and calculate predictions and losses.
     
     Args:
-        model: The trained model.
+        model: The trained model (RandomForest or ANN Ensemble).
         dataset: The dataset containing the observations.
         indices: The indices of the observations in the original dataframe.
         fold_idx: The fold index.
@@ -479,13 +354,84 @@ def _process_fold_observations(
     Returns:
         List of dictionaries, each containing results for one observation.
     """
-    # Get features and target
+    # Check if model is an ANN Ensemble
+    is_ann_ensemble = hasattr(model, 'predict_prob')
+    
+    # Get the subset of data for these indices
     Xcat, Xord, Xnum, y = dataset.get_arrays()
-    features = combine_features(Xcat, Xord, Xnum)
-    y_np = dataset.y_data.cpu().numpy()
+    
+    # Subset the arrays
+    if Xcat is not None:
+        Xcat_subset = Xcat[indices]
+    else:
+        Xcat_subset = None
+        
+    if Xord is not None:
+        Xord_subset = Xord[indices]
+    else:
+        Xord_subset = None
+        
+    if Xnum is not None:
+        Xnum_subset = Xnum[indices]
+    else:
+        Xnum_subset = None
+        
+    if y is not None:
+        y_subset = y[indices]
+    else:
+        y_subset = None
+    
+    # For Random Forest, check for missing values and raise error
+    if not is_ann_ensemble:
+        # Check for missing categorical/ordinal values (encoded as 0)
+        if Xcat_subset is not None and torch.any(Xcat_subset == 0):
+            raise ValueError(
+                "Missing values detected in categorical variables. "
+                "Random Forest cannot handle missing values."
+            )
+        if Xord_subset is not None and torch.any(Xord_subset == 0):
+            raise ValueError(
+                "Missing values detected in ordinal variables. "
+                "Random Forest cannot handle missing values."
+            )
+        # Check for missing numerical values (NaN)
+        if Xnum_subset is not None and torch.any(torch.isnan(Xnum_subset)):
+            raise ValueError(
+                "Missing values detected in numerical variables. "
+                "Random Forest cannot handle missing values."
+            )
+        
+        # Use combine_features for Random Forest
+        features = combine_features(Xcat_subset, Xord_subset, Xnum_subset)
+    else:
+        # For ANN Ensemble, replicate how AnnEnsembleDataset creates features
+        features_list = []
+        
+        if Xcat_subset is not None:
+            features_list.append(Xcat_subset.float())
+            
+        if Xord_subset is not None:
+            features_list.append(Xord_subset.float())
+            
+        if Xnum_subset is not None:
+            features_list.append(Xnum_subset.float())
+            # Add numerical mask as AnnEnsembleDataset does
+            # The mask indicates which values are NOT missing (True = present)
+            if dataset.Xnum_mask is not None:
+                Xnum_mask_subset = dataset.Xnum_mask[indices]
+                # Invert to match AnnEnsembleDataset behavior: True = not masked
+                Mnum = ~Xnum_mask_subset
+                features_list.append(Mnum.float())
+        
+        # Combine all features
+        features_tensor = torch.cat(features_list, dim=1)
+        features = features_tensor.cpu().numpy()
+    
+    # Convert y to numpy
+    y_np = y_subset.cpu().numpy() if y_subset is not None else None
     
     # Ensure target is properly shaped
-    if y.ndim > 1 and y.shape[1] == 1:
+    if y_np is not None and y_np.ndim > 1 and y_np.shape[1] == 1:
         y_np = y_np.squeeze()
     
     # Calculate predictions and losses
@@ -497,7 +443,7 @@ def _process_fold_observations(
     results = []
     for i, idx in enumerate(indices):
         original_idx = dataframe_indices[idx]
-        true_value = y_np[i]
+        true_value = y_np[i] if y_np is not None else None
         
         # Create base result row
         result_row = {
@@ -516,7 +462,14 @@ def _process_fold_observations(
                 result_row[f'pred_prob_class_{j}'] = prob
             
             # Add predicted class (highest probability)
-            classes = model.classes_
+            if is_ann_ensemble:
+                # For ANN ensemble, classes are consecutive integers
+                # starting at 1
+                classes = np.arange(1, len(probs) + 1)
+            else:
+                # For RandomForest, get classes from the model
+                classes = model.classes_
+                
             result_row['pred_class'] = classes[np.argmax(probs)]
         else:
             # For regression, add the predicted value
@@ -545,11 +498,13 @@ def run_cross_validation(
     
     Args:
         dataframe: The data containing all variables specified in dataset_spec.
-        dataset_spec: The specification describing the variables in the dataset.
+        dataset_spec: The specification describing the variables in the
+            dataset.
         cv_spec: The specification for cross-validation folds.
         model_spec: The model specification.
         random_seed: Seed for reproducibility.
-        output_folder: Folder to save results to. If None, results aren't saved.
+        output_folder: Folder to save results to. If None, results aren't
+            saved.
         overwrite_files: If True, overwrites existing files. Default is False.
         rerun_folds: If True, reruns all folds. Default is False.
             
@@ -559,7 +514,8 @@ def run_cross_validation(
             - 'observation_results': DataFrame with all observations and their
               predictions including sample_type ('train' or 'test'), actual
               values, predictions, and individual losses for each fold
-            - 'test_avg_loss': Average loss across all out-of-sample observations
+            - 'test_avg_loss': Average loss across all out-of-sample
+              observations
             - 'train_avg_loss': Average loss across all in-sample observations
     """
     # Validate input parameters
@@ -591,7 +547,8 @@ def run_cross_validation(
                 output_folder, f"fold_{fold_idx}_results.csv"
             )
             
-            # If files exist and we're not overwriting or rerunning, load results
+            # If files exist and we're not overwriting or rerunning, load
+            # results
             if (os.path.exists(fold_model_path) and
                 os.path.exists(fold_results_path) and 
                 not overwrite_files and 
@@ -648,24 +605,26 @@ def run_cross_validation(
             model = _fit_model(train_dataset, model_spec, random_seed)
             
             # Process test (out-of-sample) observations
+            # Pass indices relative to test_dataset (0-based)
             test_results = _process_fold_observations(
                 model,
                 test_dataset,
-                test_indices,
+                np.arange(len(test_indices)),  # 0-based indices
                 fold_idx,
                 'test',
-                dataframe.index,
+                dataframe.index[test_indices],  # Original dataframe indices
                 is_classifier
             )
             
             # Process train (in-sample) observations
+            # Pass indices relative to train_dataset (0-based)
             train_results = _process_fold_observations(
                 model,
                 train_dataset,
-                train_indices,
+                np.arange(len(train_indices)),  # 0-based indices
                 fold_idx,
                 'train',
-                dataframe.index,
+                dataframe.index[train_indices],  # Original dataframe indices
                 is_classifier
             )
             
@@ -717,13 +676,15 @@ def run_cross_validation(
     
     if not all_observations_df.empty:
         # Calculate test (out-of-sample) statistics
-        test_obs = all_observations_df[all_observations_df['sample_type'] == 'test']
+        test_obs =\
+            all_observations_df[all_observations_df['sample_type'] == 'test']
         if not test_obs.empty:
             test_avg_loss = test_obs['loss'].mean()
             results_summary['test_avg_loss'] = test_avg_loss
         
         # Calculate train (in-sample) statistics
-        train_obs = all_observations_df[all_observations_df['sample_type'] == 'train']
+        train_obs =\
+            all_observations_df[all_observations_df['sample_type'] == 'train']
         if not train_obs.empty:
             train_avg_loss = train_obs['loss'].mean()
             results_summary['train_avg_loss'] = train_avg_loss

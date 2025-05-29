@@ -9,7 +9,6 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
 from mixalot.datasets import DatasetSpec, MixedDataset
-from mixalot.models import RandomForestSpec
 
 
 def convert_categories_to_codes(data, var_spec):

@@ -267,7 +267,7 @@ class MixedDataset(Dataset):
         aug_mult (int, optional): Multiplier for data augmentation. Default is
             1.
         device (torch.device or str, optional): The torch device object or
-            string to specify the device to use. Default is 'cpu'.
+            string to specify the device to use. If None, prefer gpu.
         require_input (bool, optional): If True, ensures that at least one
             variable remains unmasked in every item. Default is False.
 
@@ -302,9 +302,11 @@ class MixedDataset(Dataset):
         self.mask_prob = mask_prob
         self.aug_mult = aug_mult
         self.require_input = require_input
-        self.device = (torch.device('cpu') if device is None
-                       else torch.device(device))
-
+        self.device = (
+            torch.device(device)
+            if device is not None
+            else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        )
         if Xcat is None and Xord is None and Xnum is None:
             raise ValueError("Xcat, Xord, and Xnum cannot all be None")
 

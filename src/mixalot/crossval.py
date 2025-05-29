@@ -228,14 +228,15 @@ def dataframe_to_mixed_dataset(
 def _fit_model(
     train_dataset: 'MixedDataset',
     model_spec: 'SingleTargetModelSpec',
+    device: torch.device,
     random_seed: Optional[int],
-    device: torch.device
 ):
     """Fit a model based on the provided specification.
     
     Args:
         train_dataset: The training dataset.
         model_spec: The model specification.
+        device: The device to use for training.
         random_seed: Seed for reproducibility.
         
     Returns:
@@ -588,7 +589,10 @@ def run_cross_validation(
         
         # Process this fold
         try:
-            print(f"Processing fold {fold_idx + 1} of {cv_spec.n_splits}...")
+            print(
+                f"Processing fold {fold_idx + 1} of {cv_spec.n_splits}..."
+                f' [using {device}]'
+            )
             
             # Get train and test indices for the specific fold
             train_indices, test_indices = cv_spec.get_fold_indices(
@@ -608,8 +612,7 @@ def run_cross_validation(
             )
             
             # Train the model
-            model = _fit_model(train_dataset, model_spec, random_seed,
-                               device=device)
+            model = _fit_model(train_dataset, model_spec, device, random_seed)
             
             # Process test (out-of-sample) observations
             # Pass indices relative to test_dataset (0-based)

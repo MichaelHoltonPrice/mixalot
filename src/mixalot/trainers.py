@@ -435,7 +435,7 @@ def train_ann_ensemble(
     epochs = model_spec.hyperparameters.get('epochs', 100)
     
     # Determine the device to use
-    if device:
+    if device is None:
         device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu'
         )

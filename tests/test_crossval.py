@@ -2,7 +2,7 @@
 import inspect
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import numpy as np
 import pandas as pd
@@ -538,7 +538,9 @@ class TestFitModel:
                                             simple_rf_model_spec)
         
         # Fit model
-        model = _fit_model(dataset, simple_rf_model_spec, random_seed=42)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = _fit_model(dataset, simple_rf_model_spec, device,
+                           random_seed=42)
         
         # Check that the model has the expected type
         assert isinstance(model, RandomForestClassifier)
@@ -558,7 +560,8 @@ class TestFitModel:
                                             simple_rf_numerical_model_spec)
         
         # Fit model
-        model = _fit_model(dataset, simple_rf_numerical_model_spec,
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = _fit_model(dataset, simple_rf_numerical_model_spec, device,
                            random_seed=42)
         
         # Check that the model has the expected type
@@ -591,12 +594,20 @@ class TestFitModel:
             mock_train.return_value = ensemble_model
             
             # Fit model
-            model = _fit_model(dataset, simple_ann_model_spec, random_seed=42)
+            device =\
+                torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = _fit_model(dataset, simple_ann_model_spec, device,
+                               random_seed=42)
             
             # Check that the correct training function was called
             mock_train.assert_called_once()
-            mock_train.assert_called_with(dataset, simple_ann_model_spec, 42)
-            
+            mock_train.assert_called_once()
+            args, kwargs = mock_train.call_args
+
+            assert args[:3] == (dataset, simple_ann_model_spec, 42)
+            assert 'device' in kwargs
+            assert kwargs['device'] == device
+
             # Check that the model has the expected predict_prob method
             assert hasattr(model, 'predict_prob')
 
@@ -629,7 +640,9 @@ class TestCalculateLosses:
         )
         
         # Fit model
-        model = _fit_model(train_dataset, simple_rf_model_spec, random_seed=42)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = _fit_model(train_dataset, simple_rf_model_spec, device,
+                           random_seed=42)
         
         # Get test features and true values
         Xcat, Xord, Xnum, y = test_dataset.get_arrays()
@@ -679,8 +692,9 @@ class TestCalculateLosses:
         )
         
         # Fit model
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = _fit_model(train_dataset, simple_rf_numerical_model_spec, 
-                          random_seed=42)
+                          device, random_seed=42)
         
         # Get test features and true values
         Xcat, Xord, Xnum, y = test_dataset.get_arrays()
@@ -765,7 +779,9 @@ class TestProcessFoldObservations:
                                             simple_rf_model_spec)
         
         # Fit model
-        model = _fit_model(dataset, simple_rf_model_spec, random_seed=42)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = _fit_model(dataset, simple_rf_model_spec, device,
+                           random_seed=42)
         
         # Process observations for fold 0
         fold_idx = 0
@@ -814,7 +830,8 @@ class TestProcessFoldObservations:
         )
         
         # Fit model
-        model = _fit_model(dataset, simple_rf_numerical_model_spec,
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = _fit_model(dataset, simple_rf_numerical_model_spec, device,
                            random_seed=42)
         
         # Process observations for fold 0

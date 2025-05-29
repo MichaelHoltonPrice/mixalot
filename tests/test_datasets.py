@@ -371,12 +371,18 @@ class TestMixedDataset:
         )
         
         # Verify target variable is correct
-        assert torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data))
+        assert torch.all(
+            mixed_dataset.y_data ==
+            torch.tensor(expected_y_data, device=mixed_dataset.device)
+        )
         
         # Verify Xcat has only one column now (cat_var2) since cat_var1 was
         # extracted
         assert mixed_dataset.Xcat.shape == (2, 1)
-        assert torch.all(mixed_dataset.Xcat == torch.tensor([[2], [1]]))
+        assert torch.all(
+            mixed_dataset.Xcat ==
+            torch.tensor([[2], [1]], device=mixed_dataset.device)
+        )
 
     def test_init_ordinal_target(self):
         """Test extracting an ordinal target variable."""
@@ -417,9 +423,6 @@ class TestMixedDataset:
         Xord = np.array([[2, 3], [1, 4]], dtype=np.int32)
         Xnum = np.array([[9], [10]], dtype=np.float32)
         
-        # Expected y_data should be from ord_var1
-        expected_y_data = np.array([2, 1], dtype=np.int32)
-
         # Initialize dataset
         mixed_dataset = MixedDataset(
             dataset_spec,
@@ -429,13 +432,19 @@ class TestMixedDataset:
             model_spec=model_spec
         )
         
+        # Expected y_data should be from ord_var1
+        expected_y_data = torch.tensor(np.array([2, 1], dtype=np.int32),
+                                       device=mixed_dataset.device)
         # Verify target variable is correct
-        assert torch.all(mixed_dataset.y_data == torch.tensor(expected_y_data))
+        assert torch.all(mixed_dataset.y_data == expected_y_data)
         
         # Verify Xord has only one column now (ord_var2) since ord_var1 was
         # extracted
         assert mixed_dataset.Xord.shape == (2, 1)
-        assert torch.all(mixed_dataset.Xord == torch.tensor([[3], [4]]))
+        assert torch.all(
+            mixed_dataset.Xord ==
+            torch.tensor([[3], [4]], device=mixed_dataset.device)
+        )
 
     def test_len(self):
         """Test the length calculation of the dataset."""
@@ -497,7 +506,6 @@ class TestMixedDataset:
         Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
         Xord = np.array([[2, 2], [1, 1]], dtype=np.int32)
         Xnum = np.array([[9], [10]], dtype=np.float32)
-        expected_y_data = torch.tensor([9], dtype=torch.float32)
     
         mixed_dataset = MixedDataset(
             dataset_spec, 
@@ -511,10 +519,20 @@ class TestMixedDataset:
         x_cat, x_ord, x_num, m_num, y = mixed_dataset[0]
         
         # Verify item components
-        assert torch.all(x_cat == torch.tensor([1, 2], dtype=torch.long))
-        assert torch.all(x_ord == torch.tensor([2, 2], dtype=torch.long))
+        assert torch.all(
+            x_cat ==
+            torch.tensor([1, 2], dtype=torch.long,
+                         device=mixed_dataset.device),
+        )
+        assert torch.all(
+            x_ord ==
+            torch.tensor([2, 2], device=mixed_dataset.device, dtype=torch.long)
+        )
         assert x_num is None
         assert m_num is None
+        expected_y_data = torch.tensor([9],
+                                       dtype=torch.float32,
+                                       device=mixed_dataset.device)
         assert torch.all(y == expected_y_data)
 
     def test_inconsistent_rows(self):
@@ -673,23 +691,23 @@ class TestMixedDataset:
         assert len(mixed_dataset) == 6
 
     def test_mask_prob(self):
-        """Test masking probability."""
+        """Test masking probability in MixedDataset."""
         cat_var1 = VarSpec(
-            'cat_var1', 'categorical', 
+            'cat_var1', 'categorical',
             categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
         )
         cat_var2 = VarSpec(
-            'cat_var2', 'categorical', 
+            'cat_var2', 'categorical',
             categorical_mapping=[{'A', 'B'}, {'C', 'D'}]
         )
         dataset_spec = DatasetSpec([cat_var1, cat_var2], [], [])
         Xcat = np.array([[1, 2], [2, 1]], dtype=np.int32)
-        
+    
         # Set mask probability to 0.2
         mixed_dataset = MixedDataset(
-            dataset_spec, 
-            Xcat=Xcat, 
-            mask_prob=0.2, 
+            dataset_spec,
+            Xcat=Xcat,
+            mask_prob=0.2,
             aug_mult=1
         )
     
@@ -704,11 +722,9 @@ class TestMixedDataset:
             # If there are unmasked elements, ensure they match original values
             if torch.any(x_cat != 0):
                 non_zero_indices = x_cat != 0
-                assert torch.all(
-                    x_cat[non_zero_indices].cpu() == 
-                    torch.tensor(Xcat[0])[non_zero_indices].cpu()
-                )
-            
+                expected = torch.tensor(Xcat[0], device=x_cat.device)
+                assert torch.all(x_cat[non_zero_indices] == expected[non_zero_indices])
+    
             # Record the fraction of masked values
             mask_fractions.append((x_cat == 0).float().mean().item())
     
@@ -809,12 +825,14 @@ class TestMixedDataset:
         )
         
         # Verify no target variable was extracted
-        assert mixed_dataset.y_data is None
+        expected_cat = torch.tensor(Xcat, dtype=torch.long,
+                                    device=mixed_dataset.device)
+        expected_num = torch.tensor(Xnum, dtype=torch.float,
+                                    device=mixed_dataset.device)
         
-        # Verify data tensors are intact
-        assert torch.all(mixed_dataset.Xcat == torch.tensor(Xcat))
-        assert torch.all(mixed_dataset.Xnum == torch.tensor(Xnum,
-                                                            dtype=torch.float))
+        assert mixed_dataset.y_data is None
+        assert torch.equal(mixed_dataset.Xcat, expected_cat)
+        assert torch.equal(mixed_dataset.Xnum, expected_num)
 
 
 class TestAnnEnsembleDataset:
@@ -1091,7 +1109,7 @@ class TestAnnEnsembleDataset:
         assert features[1] == 1.0  # ord_var value
         
         # Target is 0.5, adjusted to 0.5-1=-0.5
-        assert target == pytest.approx(-0.5)
+        assert target.cpu().item() == pytest.approx(-0.5)
 
     def test_combined_features(self):
         """Test that features are properly combined."""
@@ -1171,7 +1189,7 @@ class TestAnnEnsembleDataset:
         assert features[5] == 1.0  # Numerical mask (1=not missing)
         
         # Target is 0.5, but adjusted to 0.5-1=-0.5
-        assert target == pytest.approx(-0.5)
+        assert target.cpu().item() == pytest.approx(-0.5)
 
     def test_null_target(self):
         """Test __getitem__ when target is None."""

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 
 from mixalot.datasets import AnnEnsembleDataset, MixedDataset
 from mixalot.models import ANNEnsembleSpec, RandomForestSpec
@@ -351,7 +351,8 @@ class EnsembleTorchModel:
 def train_ann_ensemble(
     dataset: MixedDataset,
     model_spec: ANNEnsembleSpec,
-    random_seed: Optional[int] = None
+    random_seed: Optional[int] = None,
+    device=None,
 ) -> EnsembleTorchModel:
     """Train an ANN Ensemble model using the provided dataset and spec.
 
@@ -364,6 +365,7 @@ def train_ann_ensemble(
         dataset: The MixedDataset containing the data to train on.
         model_spec: The ANNEnsembleSpec containing model configuration.
         random_seed: Optional seed for reproducibility.
+        device: The device (CPU/GPU) to be used for training.
 
     Returns:
         The trained ANN Ensemble model.
@@ -433,9 +435,10 @@ def train_ann_ensemble(
     epochs = model_spec.hyperparameters.get('epochs', 100)
     
     # Determine the device to use
-    device = torch.device(
-        'cuda' if torch.cuda.is_available() else 'cpu'
-    )
+    if device:
+        device = torch.device(
+            'cuda' if torch.cuda.is_available() else 'cpu'
+        )
     
     # Create the ensemble model
     ensemble = EnsembleTorchModel(

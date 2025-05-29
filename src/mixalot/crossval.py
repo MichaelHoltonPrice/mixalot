@@ -17,6 +17,7 @@ from mixalot.helpers import (
     convert_categories_to_codes,
     parse_numeric_variable,
 )
+from mixalot.models import ANNEnsembleSpec, RandomForestSpec
 from mixalot.trainers import train_ann_ensemble, train_random_forest
 
 class CrossValidationFoldsSpec:
@@ -227,7 +228,8 @@ def dataframe_to_mixed_dataset(
 def _fit_model(
     train_dataset: 'MixedDataset',
     model_spec: 'SingleTargetModelSpec',
-    random_seed: Optional[int]
+    random_seed: Optional[int],
+    device: torch.device
 ):
     """Fit a model based on the provided specification.
     
@@ -242,13 +244,11 @@ def _fit_model(
     Raises:
         ValueError: If model type is not supported.
     """
-    # Import model specifications to check types
-    from mixalot.models import RandomForestSpec, ANNEnsembleSpec
-    
     if isinstance(model_spec, RandomForestSpec):
         return train_random_forest(train_dataset, model_spec, random_seed)
     elif isinstance(model_spec, ANNEnsembleSpec):
-        return train_ann_ensemble(train_dataset, model_spec, random_seed)
+        return train_ann_ensemble(train_dataset, model_spec, random_seed,
+                                  device=device)
     else:
         raise ValueError(
             f"Unsupported model type: {type(model_spec).__name__}"
@@ -259,7 +259,8 @@ def _calculate_losses(
     model,
     features,
     true_values,
-    is_classifier: bool
+    is_classifier: bool,
+    device=None,
 ):
     """Calculate predictions and losses for a set of observations.
     
@@ -268,6 +269,7 @@ def _calculate_losses(
         features: The feature matrix.
         true_values: The true target values.
         is_classifier: Whether this is a classification problem.
+        device: The device to use for prediction.
         
     Returns:
         Tuple containing (predictions, losses).
@@ -286,9 +288,10 @@ def _calculate_losses(
         if is_ann_ensemble:
             # Convert features to tensor for ANN ensemble
             features_tensor = torch.tensor(features, dtype=torch.float32)
-            device = torch.device(
-                'cuda' if torch.cuda.is_available() else 'cpu'
-            )
+            if device is None:
+                device = torch.device(
+                    'cuda' if torch.cuda.is_available() else 'cpu'
+                )
             # Get probabilities from ANN ensemble
             pred_proba =\
                 model.predict_prob(features_tensor, device).cpu().numpy()
@@ -518,6 +521,9 @@ def run_cross_validation(
               observations
             - 'train_avg_loss': Average loss across all in-sample observations
     """
+    # Use a gpu if possible
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     # Validate input parameters
     _validate_cv_inputs(dataframe, dataset_spec, cv_spec, model_spec)
     
@@ -602,7 +608,8 @@ def run_cross_validation(
             )
             
             # Train the model
-            model = _fit_model(train_dataset, model_spec, random_seed)
+            model = _fit_model(train_dataset, model_spec, random_seed,
+                               device=device)
             
             # Process test (out-of-sample) observations
             # Pass indices relative to test_dataset (0-based)

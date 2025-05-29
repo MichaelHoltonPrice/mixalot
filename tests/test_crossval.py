@@ -703,7 +703,6 @@ class TestCalculateLosses:
         # Losses should be positive floats (squared errors)
         assert all(isinstance(loss, float) for loss in losses)
         assert all(loss >= 0 for loss in losses)
-    
 
     def test_calculate_losses_ann_classification(self, simple_dataset_spec,
                                                  simple_ann_model_spec):
@@ -718,6 +717,11 @@ class TestCalculateLosses:
             hidden_sizes=[32, 16],
             dropout_prob=0.3
         )
+        
+        # Move models to the appropriate device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        for model in ensemble_model.models:
+            model.to(device)
         
         # Create sample features and true values
         features = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
@@ -869,6 +873,12 @@ class TestProcessFoldObservations:
                 hidden_sizes=[32, 16],
                 dropout_prob=0.3
             )
+            
+            # Move models to the appropriate device
+            device =\
+                torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            for model in ensemble_model.models:
+                model.to(device)
             
             # Process observations for fold 0
             fold_idx = 0

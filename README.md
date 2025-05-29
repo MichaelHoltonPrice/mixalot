@@ -35,7 +35,7 @@ Something like this may work to install torch for GPU usage, but consider
 searching the internet for an up-to-date approach applicable to your situation:
 
 ```bash
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install torch==1.13.1+cu116 torchvision==0.14.1+cu116 torchaudio==0.13.1+cu116 --index-url https://download.pytorch.org/whl/cu116
 ```
 
 Run all of the unit tests:

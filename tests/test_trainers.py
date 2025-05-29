@@ -737,7 +737,8 @@ class TestTrainANNEnsemble:
         features_batch = features.unsqueeze(0)
         
         # Should be able to predict without error
-        device = torch.device('cpu')
+        # Use the same device that was used for training
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         probs = model.predict_prob(features_batch, device)
         
         # Check prediction properties
@@ -746,7 +747,7 @@ class TestTrainANNEnsemble:
         assert torch.all(probs <= 1.0)
         assert torch.allclose(
             torch.sum(probs, dim=1), 
-            torch.ones(1), 
+            torch.ones(1, device=probs.device),  # ensure tensor on same device
             rtol=1e-6
         )
 
@@ -777,7 +778,8 @@ class TestTrainANNEnsemble:
         X_sample = X_sample.unsqueeze(0)  # Add batch dimension
         
         # Make a prediction
-        device = torch.device('cpu')
+        # Use the same device that was used for training
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         probs = model.predict_prob(X_sample, device)
         
         # Check prediction properties
@@ -786,7 +788,7 @@ class TestTrainANNEnsemble:
         assert torch.all(probs <= 1.0)
         assert torch.allclose(
             torch.sum(probs, dim=1), 
-            torch.ones(1), 
+            torch.ones(1, device=probs.device),  # make tensors on same device
             rtol=1e-6
         )
         
